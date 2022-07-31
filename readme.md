@@ -1,0 +1,1 @@
+Just a tool to get financial data and display it somehow, probably using tui. So far after the first broadcast it uses crossterm to get keyboard input and has one method to make blocking requests via reqwest through FinnHub's free API.
