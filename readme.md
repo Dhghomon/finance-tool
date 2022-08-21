@@ -2,9 +2,9 @@ Just a tool to get financial data and display it somehow, probably using tui. So
 
 Todo: 
 
-- Think about getting rid of all the Mutexes, they are kind of annoying
-- Taking user input and then match inside the tui draw function
-- Error handling
+- Remove strum (fun to do but total overkill)
+- Move API choices from top of block 1 to table: use all arrow keys to choose
+- Find company automatically instead of having to remember symbol and moving to company profile to manually type in
 
 API stuff todo:
 
