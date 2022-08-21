@@ -1,170 +1,38 @@
 use std::collections::BTreeMap;
 
-use anyhow::{Context, Error};
 use crossterm::event::{read, Event, KeyCode, KeyEvent, KeyModifiers};
+use finance_tool::app::{ApiChoice, FinanceClient};
 use reqwest::blocking::Client;
-use serde::{Deserialize, Serialize};
 use tui::{
     backend::CrosstermBackend,
     layout::{Alignment, Constraint, Direction, Layout},
     style::{Color, Style},
-    text::Span,
     widgets::{Block, Borders, Paragraph, Wrap},
     Terminal,
 };
 
-pub const API_KEY: &str = include_str!("..\\key.txt");
-
-struct FinanceClient {
-    url: String,
-    client: Client,
-    search_string: String,   // push + pop // MSFT
-    current_content: String, // Results etc. of searches
-    choice: ApiChoice,
-}
-
-impl FinanceClient {
-    fn switch(&mut self) {
-        self.choice = match self.choice {
-            ApiChoice::SymbolSearch => ApiChoice::CompanyInfo,
-            ApiChoice::CompanyInfo => ApiChoice::SymbolSearch,
-        }
-    }
-    fn all_choices(&self) -> Vec<Span<'static>> {
-        use ApiChoice::*; // SybolSearch
-        let choices = vec![format!("{:?}", SymbolSearch), format!("{:?}", CompanyInfo)];
-
-        choices
-            .into_iter()
-            .map(|choice_string| {
-                let current_choice = format!("{:?}", self.choice);
-                if choice_string == current_choice {
-                    Span::styled(
-                        format!("{choice_string} "),
-                        Style::default().fg(Color::LightYellow),
-                    )
-                } else {
-                    Span::raw(format!("{choice_string} "))
-                }
-            })
-            .collect::<Vec<_>>()
-    }
-}
-
-#[derive(Debug, Clone, Copy, PartialEq)]
-pub enum ApiChoice {
-    SymbolSearch,
-    CompanyInfo,
-}
-
-// Style::default()
-//     .fg(Color::Black)
-//     .bg(Color::Green)
-//     .add_modifier(Modifier::ITALIC | Modifier::BOLD);
-
-impl std::fmt::Display for ApiChoice {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        use ApiChoice::*;
-        let output = match self {
-            SymbolSearch => "Company symbol",
-            CompanyInfo => "Company info",
-        };
-        write!(f, "{}", output)
-    }
-}
-
-/// Serialize = into JSON
+/// Select Market
 ///
-/// Deserialize = into Rust type
-#[derive(Debug, Serialize, Deserialize)]
-struct CompanyInfo {
-    country: String,
-    currency: String,
-    exchange: String,
-    #[serde(rename = "finnhubIndustry")]
-    industry: String,
-    ipo: String,
-    #[serde(rename = "marketCapitalization")]
-    market_capitalization: f64,
-    name: String,
-    phone: String,
-    #[serde(rename = "shareOutstanding")]
-    shares_outstanding: f64,
-    ticker: String,
-    weburl: String,
-}
-
-impl std::fmt::Display for CompanyInfo {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        let CompanyInfo {
-            country,
-            industry,
-            currency,
-            exchange,
-            ipo,
-            market_capitalization,
-            name,
-            phone,
-            shares_outstanding,
-            ticker,
-            weburl,
-        } = self;
-
-        let company_info = format!(
-            "
-Company name: {name}
-Country: {country}
-Currency: {currency}
-Exchange: {exchange}
-Industry: {industry}
-Ipo: {ipo}
-Market capitalization: {market_capitalization}
-Ticker: {ticker}
-Shares: {shares_outstanding}
-Phone: {phone}
-Url: {weburl}
-"
-        );
-        write!(f, "{}", company_info)
-    }
-}
+enum Market {}
 
 /// todo! Make into real error
 enum ClientError {
     IncorrectInput,
 }
 
-impl FinanceClient {
-    // todo! remove unwraps
-    fn get_profile_by_symbol(&self) -> Result<String, Error> {
-        let response = self
-            .client
-            .get(format!(
-                "{}/stock/profile2?symbol={}",
-                self.url, self.search_string
-            ))
-            .header("X-Finnhub-Token", API_KEY)
-            .send()
-            .with_context(|| "Couldn't send via client")?;
-        let text = response.text().with_context(|| "No text for some reason")?;
-        let company_info: CompanyInfo = serde_json::from_str(&text).with_context(|| {
-            format!(
-                "Couldn't deserialize {} into CompanyInfo struct.\nText from Finnhub: '{text}'",
-                self.search_string
-            )
-        })?;
-        Ok(company_info.to_string())
-    }
-}
-
-fn company_search(needle: &str, haystack: &Vec<(&str, &str)>) -> String {
-    haystack.iter().filter_map(|(company_name, company_symbol)| {
-        if company_name.contains(needle) {
-            Some(format!("{}: {}\n", company_symbol, company_name))
-        } else {
-            None
-        }
-    }).collect::<String>()
+fn company_search(needle: &str, haystack: &[(&str, &str)]) -> String {
+    haystack
+        .iter()
+        .filter_map(|(company_name, company_symbol)| {
+            let needle = needle.to_lowercase();
+            let company_name = company_name.to_lowercase();
+            if company_name.contains(&needle) {
+                Some(format!("{}: {}\n", company_symbol, company_name))
+            } else {
+                None
+            }
+        })
+        .collect::<String>()
 }
 
 const COMPANY_STR: &str = include_str!("../company_symbols.json");
@@ -185,7 +53,7 @@ fn main() -> Result<(), anyhow::Error> {
         client: Client::default(),
         search_string: String::new(),
         current_content: String::new(),
-        choice: ApiChoice::CompanyInfo,
+        choice: ApiChoice::CompanyProfile,
     };
 
     // Input
@@ -215,7 +83,7 @@ fn main() -> Result<(), anyhow::Error> {
                         client.search_string.pop();
                     }
                     (KeyCode::Enter, _) => {
-                        client.current_content = match client.get_profile_by_symbol() {
+                        client.current_content = match client.company_profile() {
                             Ok(search_result) => search_result,
                             Err(e) => e.to_string(),
                         }
@@ -233,7 +101,7 @@ fn main() -> Result<(), anyhow::Error> {
             Event::Paste(_s) => {}
             _ => {}
         }
-        if client.choice == ApiChoice::SymbolSearch {
+        if client.choice == ApiChoice::SymbolSearch && !client.search_string.is_empty() {
             client.current_content = company_search(&client.search_string, &companies);
         }
         terminal.clear().unwrap();
