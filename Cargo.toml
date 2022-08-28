@@ -11,6 +11,4 @@ crossterm = "0.25.0"
 reqwest = { version = "0.11.11", features = ["blocking"] }
 serde = { version = "1.0.142", features = ["derive"] }
 serde_json = "1.0.83"
-strum = "0.24.1"
-strum_macros = "0.24.3"
 tui = "0.19.0"

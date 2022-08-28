@@ -1,84 +1,84 @@
 pub const API_KEY: &str = include_str!("..\\key.txt");
 
-// pub const EXCHANGE_CODES: [&str; 10] = [
-//   "  AS",
-//   "AT",
-//   "AX",
-//   "BA",
-//   "BC",
-//   "BD",
-//   "BE",
-//   "BK",
-//   "BO",
-//   "BR",
-//   "CA",
-//   "CN",
-//   "CO",
-//   "CR",
-//   "DB",
-//   "DE",
-//   "DU",
-//   "F",
-//   "HE",
-//   "HK",
-//   "HM",
-//   "IC",
-//   "IR",
-//   "IS",
-//   "JK",
-//   "JO",
-//   "KL",
-//   "KQ",
-//   "KS",
-//   "L",
-//   "LN",
-//   "LS",
-//   "MC",
-//   "ME",
-//   "MI",
-//   "MU",
-//   "MX",
-//   "NE",
-//   "NL",
-//   "NS",
-//   "NZ",
-//   "OL",
-//   "PA",
-//   "PM",
-//   "PR",
-//   "QA",
-//   "RG",
-//   "SA",
-//   "SG",
-//   "SI",
-//   "SN",
-//   "SR",
-//   "SS",
-//   "ST",
-//   "SW",
-//   "SZ",
-//   "T",
-//   "TA",
-//   "TL",
-//   "TO",
-//   "TW",
-//   "TWO",
-//   "US",
-//   "V",
-//   "VI",
-//   "VN",
-//   "VS",
-//   "WA",
-//   "HA",
-//   "SX",
-//   "TG",
-//   "SC"
-// ];
+pub const EXCHANGE_CODES: [&str; 72] = [
+  "AS",
+  "AT",
+  "AX",
+  "BA",
+  "BC",
+  "BD",
+  "BE",
+  "BK",
+  "BO",
+  "BR",
+  "CA",
+  "CN",
+  "CO",
+  "CR",
+  "DB",
+  "DE",
+  "DU",
+  "F",
+  "HE",
+  "HK",
+  "HM",
+  "IC",
+  "IR",
+  "IS",
+  "JK",
+  "JO",
+  "KL",
+  "KQ",
+  "KS",
+  "L",
+  "LN",
+  "LS",
+  "MC",
+  "ME",
+  "MI",
+  "MU",
+  "MX",
+  "NE",
+  "NL",
+  "NS",
+  "NZ",
+  "OL",
+  "PA",
+  "PM",
+  "PR",
+  "QA",
+  "RG",
+  "SA",
+  "SG",
+  "SI",
+  "SN",
+  "SR",
+  "SS",
+  "ST",
+  "SW",
+  "SZ",
+  "T",
+  "TA",
+  "TL",
+  "TO",
+  "TW",
+  "TWO",
+  "US",
+  "V",
+  "VI",
+  "VN",
+  "VS",
+  "WA",
+  "HA",
+  "SX",
+  "TG",
+  "SC"
+];
 
 pub mod app {
-    use std::{fmt::Display, str::FromStr};
+    use std::fmt::Debug;
 
-    use anyhow::{anyhow, Context, Error};
+    use anyhow::{Context, Error};
     use reqwest::blocking::Client;
     use serde::de::DeserializeOwned;
     use tui::{
@@ -86,7 +86,7 @@ pub mod app {
         text::Span,
     };
 
-    use crate::{api::CompanyProfile, API_KEY};
+    use crate::{api::{CompanyProfile, StockSymbol}, API_KEY, EXCHANGE_CODES};
 
     pub struct FinanceClient {
         pub url: String,
@@ -94,13 +94,16 @@ pub mod app {
         pub search_string: String,   // push + pop // MSFT
         pub current_content: String, // Results etc. of searches
         pub choice: ApiChoice,
+        pub current_market: String,
+        pub companies: Vec<(String, String)>
     }
 
+    /// Vec<StockSymbol>
     impl FinanceClient {
-        pub fn finnhub_request<T: DeserializeOwned + Display>(
+        pub fn single_request<T: DeserializeOwned + Debug>(
             &self,
             url: String,
-        ) -> Result<String, Error> {
+        ) -> Result<T, Error> {
             let response = self
                 .client
                 .get(url)
@@ -108,25 +111,89 @@ pub mod app {
                 .send()
                 .with_context(|| "Couldn't send via client")?;
             let text = response.text().with_context(|| "No text for some reason")?;
+
             let finnhub_reply: T = serde_json::from_str(&text).with_context(|| {
                 format!(
                     "Couldn't deserialize {} into CompanyProfile struct.\nText from Finnhub: '{text}'",
                     self.search_string
                 )
             })?;
-            Ok(finnhub_reply.to_string())
+            Ok(finnhub_reply)
         }
 
+        pub fn multi_request<T: DeserializeOwned + Debug>(
+            &self,
+            url: String,
+        ) -> Result<Vec<T>, Error> {
+            let response = self
+                .client
+                .get(url)
+                .header("X-Finnhub-Token", API_KEY)
+                .send()
+                .with_context(|| "Couldn't send via client")?;
+            let text = response.text().with_context(|| "No text for some reason")?;
+
+            let finnhub_reply: Vec<T> = serde_json::from_str(&text).with_context(|| {
+                format!(
+                    "Couldn't deserialize {} into CompanyProfile struct.\nText from Finnhub: '{text}'",
+                    self.search_string
+                )
+            })?;
+            Ok(finnhub_reply)
+        }
+
+        pub fn company_search(&self, needle: &str) -> String {
+            self.companies
+                .iter()
+                .filter_map(|(company_name, company_symbol)| {
+                    let needle = needle.to_lowercase();
+                    let company_name = company_name.to_lowercase();
+                    if company_name.contains(&needle) {
+                        Some(format!("{}: {}\n", company_symbol, company_name))
+                    } else {
+                        None
+                    }
+                })
+                .collect::<String>()
+        }
+
+        /// /stock/profile?symbol=AAPL
         pub fn company_profile(&self) -> Result<String, Error> {
             let url = format!("{}/stock/profile2?symbol={}", self.url, self.search_string);
-            let company_info = self.finnhub_request::<CompanyProfile>(url)?;
-            Ok(company_info)
+            let company_info = self.single_request::<CompanyProfile>(url)?;
+            Ok(company_info.to_string())
         }
 
         /// /stock/symbol?exchange=US
-        pub fn stock_symbol(&self) -> Result<String, Error> {
-            todo!()
+        pub fn stock_symbols(&self) -> Result<Vec<StockSymbol>, Error> {
+            let url = format!("{}/stock/symbol?exchange={}", self.url, self.current_market);
+            let stock_symbols = self.multi_request::<StockSymbol>(url)?;
+            Ok(stock_symbols)
         }
+
+        /// User hits enter, checks to see if market exists, if not, stay w
+        pub fn choose_market(&mut self) -> String {
+            match EXCHANGE_CODES.iter().find(|code| **code == self.search_string) {
+                // e.g. user types "US", which is valid
+                Some(good_market_code) => {
+                    self.current_market = good_market_code.to_string();
+                    match self.stock_symbols() {
+                        Ok(stock_symbols) => {
+                            self.companies = stock_symbols.into_iter().map(|info| {
+                            (info.description,
+                                    info.display_symbol)
+                            }).collect::<Vec<(String, String)>>();
+                            format!("Successfully got company info from market {}", self.current_market)
+                        }
+                        Err(_) => {
+                            format!("No market called {} exists", self.search_string)
+                        }
+                    }
+                }
+                // user types something that isn't a market
+                None => format!("No market called {} exists", self.search_string)
+        }
+    }
 
         /// company-news?symbol=AAPL&from=2021-09-01&to=2021-09-09
         /// Required: date + symbol
@@ -147,9 +214,12 @@ pub mod app {
                 CompanyProfile => StockSymbol,
                 StockSymbol => MarketNews,
                 MarketNews => CompanyNews,
-                CompanyNews => SymbolSearch,
+                CompanyNews => GetMarket,
+                GetMarket => SymbolSearch
             }
         }
+
+        // todo!() turn this into Tables: 3*3 and then later 4*4
         pub fn all_choices(&self) -> Vec<Span> {
             use ApiChoice::*; // SymbolSearch
             let choices = [
@@ -158,28 +228,25 @@ pub mod app {
                 StockSymbol,
                 MarketNews,
                 CompanyNews,
+                GetMarket
             ];
             let choices = choices.into_iter().map(|choice| choice.to_string());
 
-            let mut even_odd = [true, false].into_iter().cycle();
             choices
                 .into_iter()
                 .map(|choice_string| {
-                    let black = even_odd.next().unwrap();
-                    let bg = if black { Color::Black } else { Color::DarkGray };
                     let current_choice = format!("{}", self.choice);
                     if choice_string == current_choice {
                         Span::styled(
                             format!(" {choice_string} "),
                             Style::default()
-                                .fg(Color::LightYellow)
-                                .bg(bg)
+                                .bg(Color::Gray)
                                 .add_modifier(Modifier::UNDERLINED),
                         )
                     } else {
                         Span::styled(
                             format!(" {choice_string} "),
-                            Style::default().fg(Color::White).bg(bg),
+                            Style::default(),
                         )
                     }
                 })
@@ -194,6 +261,7 @@ pub mod app {
         StockSymbol,
         MarketNews,
         CompanyNews,
+        GetMarket
     }
 
     impl std::fmt::Display for ApiChoice {
@@ -203,102 +271,14 @@ pub mod app {
                 SymbolSearch => "Company symbol",
                 CompanyProfile => "Company info",
                 StockSymbol => "Stock symbol",
-                MarketNews => "Market news",
+                MarketNews => "News",
                 CompanyNews => "Company news",
+                GetMarket => "Get market"
             };
             write!(f, "{}", output)
         }
     }
 
-    // Todo!() probably delete this because it feels like overkill
-    #[derive(Debug, Display, EnumIter, PartialEq, Eq)]
-    pub enum ExchangeCodes {
-        AS,
-        AT,
-        AX,
-        BA,
-        BC,
-        BD,
-        BE,
-        BK,
-        BO,
-        BR,
-        CA,
-        CN,
-        CO,
-        CR,
-        DB,
-        DE,
-        DU,
-        F,
-        HE,
-        HK,
-        HM,
-        IC,
-        IR,
-        IS,
-        JK,
-        JO,
-        KL,
-        KQ,
-        KS,
-        L,
-        LN,
-        LS,
-        MC,
-        ME,
-        MI,
-        MU,
-        MX,
-        NE,
-        NL,
-        NS,
-        NZ,
-        OL,
-        PA,
-        PM,
-        PR,
-        QA,
-        RG,
-        SA,
-        SG,
-        SI,
-        SN,
-        SR,
-        SS,
-        ST,
-        SW,
-        SZ,
-        T,
-        TA,
-        TL,
-        TO,
-        TW,
-        TWO,
-        US,
-        V,
-        VI,
-        VN,
-        VS,
-        WA,
-        HA,
-        SX,
-        TG,
-        SC,
-    }
-
-    use strum::IntoEnumIterator;
-    use strum_macros::{Display, EnumIter};
-
-    impl FromStr for ExchangeCodes {
-        type Err = anyhow::Error;
-
-        fn from_str(s: &str) -> Result<Self, Self::Err> {
-            ExchangeCodes::iter()
-                .find(|code| &code.to_string() == s)
-                .ok_or_else(|| anyhow!("Couldn't get ExchangeCode from {s}"))
-        }
-    }
 }
 
 /// Structs and enums for the Finnhub API.
@@ -307,7 +287,7 @@ pub mod api {
     /// Serialize = into JSON
     ///
     /// Deserialize = into Rust type
-    #[derive(Debug, Serialize, Deserialize)]
+    #[derive(Clone, Debug, Serialize, Deserialize)]
     pub struct CompanyProfile {
         country: String,
         currency: String,
@@ -367,7 +347,7 @@ Url: {weburl}
     ///   "symbol": "AAPL",
     ///   "type": "Common Stock"
     use serde::{Deserialize, Serialize};
-    #[derive(Serialize, Deserialize)]
+    #[derive(Debug, Serialize, Deserialize)]
     pub struct SymbolLookup {
         pub description: String,
         #[serde(rename = "displaySymbol")]
@@ -387,17 +367,17 @@ Url: {weburl}
     /// "symbol": "UPOW",
     /// "type": "Common Stock"
     ///
-    #[derive(Serialize, Deserialize)]
-    struct StockSymbol {
-        currency: String,
-        description: String,
+    #[derive(Debug, Serialize, Deserialize)]
+    pub struct StockSymbol {
+        pub currency: String,
+        pub description: String,
         #[serde(rename = "displaySymbol")]
-        display_symbol: String,
-        figi: String,
-        mic: String,
-        symbol: String,
+        pub display_symbol: String,
+        pub figi: String,
+        pub mic: String,
+        pub symbol: String,
         #[serde(rename = "type")]
-        type_: String,
+        pub type_: String,
     }
 
     // Market news
@@ -411,17 +391,17 @@ Url: {weburl}
     /// "source": "CNBC",
     /// "summary": "Shares of Square soared on Tuesday evening after posting better-than-expected quarterly results and strong growth in its consumer payments app.",
     /// "url": "https://www.cnbc.com/2020/08/04/square-sq-earnings-q2-2020.html"
-    #[derive(Serialize, Deserialize)]
-    struct MarketNews {
-        category: String,
-        datetime: i64,
-        headline: String,
-        id: i64,
-        image: String,
-        related: String,
-        source: String,
-        summary: String,
-        url: String,
+    #[derive(Debug, Serialize, Deserialize)]
+    pub struct MarketNews {
+        pub category: String,
+        pub datetime: i64,
+        pub headline: String,
+        pub id: i64,
+        pub image: String,
+        pub related: String,
+        pub source: String,
+        pub summary: String,
+        pub url: String,
     }
 
     // Company News
@@ -438,7 +418,7 @@ Url: {weburl}
     //     "url": "https://economictimes.indiatimes.com/industry/cons-products/electronics/more-sops-needed-to-boost-electronic-manufacturing-top-govt-official/articleshow/71321308.cms"
     //   },
 
-    #[derive(Serialize, Deserialize)]
+    #[derive(Debug, Serialize, Deserialize)]
     struct CompanyNews {
         category: String,
         datetime: i64,

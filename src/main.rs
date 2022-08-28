@@ -1,7 +1,5 @@
-use std::collections::BTreeMap;
-
 use crossterm::event::{read, Event, KeyCode, KeyEvent, KeyModifiers};
-use finance_tool::app::{ApiChoice, FinanceClient};
+use finance_tool::{app::{ApiChoice, FinanceClient}};
 use reqwest::blocking::Client;
 use tui::{
     backend::CrosstermBackend,
@@ -20,29 +18,21 @@ enum ClientError {
     IncorrectInput,
 }
 
-fn company_search(needle: &str, haystack: &[(&str, &str)]) -> String {
-    haystack
-        .iter()
-        .filter_map(|(company_name, company_symbol)| {
-            let needle = needle.to_lowercase();
-            let company_name = company_name.to_lowercase();
-            if company_name.contains(&needle) {
-                Some(format!("{}: {}\n", company_symbol, company_name))
-            } else {
-                None
-            }
-        })
-        .collect::<String>()
-}
+// const COMPANY_STR: &str = include_str!("../company_symbols.json");
 
-const COMPANY_STR: &str = include_str!("../company_symbols.json");
+// todo! Divide into four
+// 1) init
+// 2) read
+// 3) update
+// 4) draw
+
+// #[derive(Debug)]
+// struct CompanyInfo {
+//     name: String,
+//     symbol: String
+// }
 
 fn main() -> Result<(), anyhow::Error> {
-    let companies = serde_json::from_str::<BTreeMap<&str, &str>>(COMPANY_STR)
-        .unwrap()
-        .into_iter()
-        .map(|(key, value)| (key, value))
-        .collect::<Vec<(_, _)>>();
 
     let stdout = std::io::stdout();
     let backend = CrosstermBackend::new(stdout);
@@ -54,7 +44,15 @@ fn main() -> Result<(), anyhow::Error> {
         search_string: String::new(),
         current_content: String::new(),
         choice: ApiChoice::CompanyProfile,
+        current_market: "US".to_string(),
+        companies: Vec::new()
     };
+
+    let stock_symbols = client.stock_symbols()?;
+    client.companies = stock_symbols.into_iter().map(|info| {
+    (info.description,
+            info.display_symbol)
+    }).collect::<Vec<(String, String)>>();
 
     // Input
     // State change / enum, char+, char-
@@ -83,10 +81,19 @@ fn main() -> Result<(), anyhow::Error> {
                         client.search_string.pop();
                     }
                     (KeyCode::Enter, _) => {
-                        client.current_content = match client.company_profile() {
-                            Ok(search_result) => search_result,
-                            Err(e) => e.to_string(),
+                        match client.choice {
+                            ApiChoice::CompanyProfile => {
+                                client.current_content = match client.company_profile() {
+                                    Ok(search_result) => search_result.to_string(),
+                                    Err(e) => e.to_string(),
+                                }        
+                            }
+                            ApiChoice::GetMarket => {
+                                client.current_content = client.choose_market();
+                            }
+                            _ => {}
                         }
+                        
                     }
                     (KeyCode::Tab, _) => {
                         client.switch();
@@ -102,7 +109,7 @@ fn main() -> Result<(), anyhow::Error> {
             _ => {}
         }
         if client.choice == ApiChoice::SymbolSearch && !client.search_string.is_empty() {
-            client.current_content = company_search(&client.search_string, &companies);
+            client.current_content = client.company_search(&client.search_string);
         }
         terminal.clear().unwrap();
         let current_search_string = client.search_string.clone();
