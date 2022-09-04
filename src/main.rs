@@ -1,11 +1,13 @@
-use crossterm::event::{read, Event, KeyCode, KeyEvent, KeyModifiers};
-use finance_tool::{app::{ApiChoice, FinanceClient}};
-use reqwest::blocking::Client;
+use finance_tool::{
+    app::FinanceClient,
+    CURRENT_CONTENT, SEARCH_STRING,
+};
 use tui::{
     backend::CrosstermBackend,
     layout::{Alignment, Constraint, Direction, Layout},
-    style::{Color, Style},
-    widgets::{Block, Borders, Paragraph, Wrap},
+    style::{Color, Modifier, Style},
+    text::Span,
+    widgets::{Block, Borders, Paragraph, Row, Table, Wrap},
     Terminal,
 };
 
@@ -32,127 +34,140 @@ enum ClientError {
 //     symbol: String
 // }
 
-fn main() -> Result<(), anyhow::Error> {
+enum Window {
+    ApiChoice,
+    Search,
+    Results,
+}
 
+// Ideal layout looks more like this:
+
+// ┌ Company symbol  Company info  Stock symbol ─────────  │    Search for:─
+// │                                                                          │
+// └─News ──────────Company news  Get market───────────────│
+// ┌                                    ─│                  │
+// │                                                                          │
+// └──────────────────────────────────────────────────────────────────────────┘
+
+// ┌Results───────────────────────────────────────────────────────────────────┐
+// │                                                                          │
+// │                                                                          │
+// │                                                                          │
+// │                                                                          │
+// │                                                                          │
+// │                                                                          │
+// │                                                                          │
+// │                                                                          │
+// │                                                                          │
+// │                                                                          │
+// └──────────────────────────────────────────────────────────────────────────┘
+
+fn make_table(all_choices: Vec<Span>) -> Table<'static> {
+    let all_rows = all_choices
+        .chunks(3)
+        .map(|choices| {
+            let mut row_title_vec = vec![];
+            let mut choice_iter = choices.iter();
+            for title in choice_iter.by_ref() {
+                row_title_vec.push(&title.content)
+            }
+            row_title_vec
+        });
+
+    let into_rows = all_rows
+        .map(|not_yet_rows| {
+            let vec_of_strings = not_yet_rows
+                .into_iter()
+                .map(|single_item| single_item.to_string())
+                .collect::<Vec<String>>();
+            Row::new(vec_of_strings)
+        })
+        .collect::<Vec<Row>>();
+
+    Table::new(into_rows)
+    // You can set the style of the entire Table.
+    .style(Style::default().fg(Color::White))
+    // As any other widget, a Table can be wrapped in a Block.
+    .block(Block::default().title("Api choices").borders(Borders::ALL))
+    // Columns widths are constrained in the same way as Layout...
+    .widths(&[
+        Constraint::Percentage(33),
+        Constraint::Percentage(33),
+        Constraint::Percentage(34),
+    ])
+    // ...and they can be separated by a fixed spacing.
+    .column_spacing(1)
+    // If you wish to highlight a row in any specific way when it is selected...
+    .highlight_style(Style::default().add_modifier(Modifier::BOLD))
+    // ...and potentially show a symbol in front of the selection.
+    .highlight_symbol(">>")
+}
+
+fn main() -> Result<(), anyhow::Error> {
     let stdout = std::io::stdout();
     let backend = CrosstermBackend::new(stdout);
     let mut terminal = Terminal::new(backend)?;
 
-    let mut client = FinanceClient {
-        url: "https://finnhub.io/api/v1/".to_string(),
-        client: Client::default(),
-        search_string: String::new(),
-        current_content: String::new(),
-        choice: ApiChoice::CompanyProfile,
-        current_market: "US".to_string(),
-        companies: Vec::new()
-    };
+    let mut client = FinanceClient::default();
 
     let stock_symbols = client.stock_symbols()?;
-    client.companies = stock_symbols.into_iter().map(|info| {
-    (info.description,
-            info.display_symbol)
-    }).collect::<Vec<(String, String)>>();
+    client.companies = stock_symbols
+        .into_iter()
+        .map(|info| (info.description, info.display_symbol))
+        .collect::<Vec<(String, String)>>();
 
     // Input
     // State change / enum, char+, char-
     // Draw
 
     loop {
-        match read().unwrap() {
-            Event::Key(key_event) => {
-                let KeyEvent {
-                    code, modifiers, ..
-                } = key_event;
-                // Typing event
-                match (code, modifiers) {
-                    (KeyCode::Char(c), modifier)
-                        if c == 'q' && modifier == KeyModifiers::CONTROL =>
-                    {
-                        break;
-                    }
-                    (KeyCode::Char(c), _) => {
-                        client.search_string.push(c);
-                    }
-                    (KeyCode::Esc, _) => {
-                        client.search_string.clear();
-                    }
-                    (KeyCode::Backspace, _) => {
-                        client.search_string.pop();
-                    }
-                    (KeyCode::Enter, _) => {
-                        match client.choice {
-                            ApiChoice::CompanyProfile => {
-                                client.current_content = match client.company_profile() {
-                                    Ok(search_result) => search_result.to_string(),
-                                    Err(e) => e.to_string(),
-                                }        
-                            }
-                            ApiChoice::GetMarket => {
-                                client.current_content = client.choose_market();
-                            }
-                            _ => {}
-                        }
-                        
-                    }
-                    (KeyCode::Tab, _) => {
-                        client.switch();
-                    }
-                    (_, _) => {}
-                }
-            }
-            Event::Mouse(_) => {}
-            Event::Resize(num1, num2) => {
-                println!("Window has been resized to {num1}, {num2}");
-            }
-            Event::Paste(_s) => {}
-            _ => {}
-        }
-        if client.choice == ApiChoice::SymbolSearch && !client.search_string.is_empty() {
-            client.current_content = client.company_search(&client.search_string);
-        }
+        // Handles key events and decides what to do
+        client.handle_event();
         terminal.clear().unwrap();
-        let current_search_string = client.search_string.clone();
-        let current_content = client.current_content.clone();
         terminal
             .draw(|f| {
-                let chunks = Layout::default()
+                // First 2 big blocks
+                let big_blocks = Layout::default()
                     .direction(Direction::Vertical)
                     .margin(3)
                     .constraints(
                         [
-                            Constraint::Percentage(20), // Choice enum (company search, etc.)
-                            Constraint::Percentage(20), // Search string
+                            Constraint::Percentage(40), // api and search box
                             Constraint::Percentage(60), // Results
                         ]
                         .as_ref(),
                     )
                     .split(f.size());
 
-                let block1 = Block::default()
-                    .title(client.all_choices())
-                    .borders(Borders::ALL);
-                f.render_widget(block1, chunks[0]);
+                // 2 Rects
+                let api_and_search_box = Layout::default()
+                    .direction(Direction::Horizontal)
+                    .constraints([Constraint::Percentage(70), Constraint::Percentage(30)].as_ref())
+                    .split(big_blocks[0]);
 
-                let block2 = Block::default().title("Search for:").borders(Borders::ALL);
-                let paragraph1 = Paragraph::new(current_search_string)
-                    .block(block2)
+                // Api choices: top left block
+                let all_choices = client.all_choices();
+                let choices_block = make_table(all_choices);
+
+                // Search window: top right block
+                let search_area = Paragraph::new(SEARCH_STRING.inner().clone())
+                    .block(Block::default().title("Search for:").borders(Borders::ALL))
                     .style(Style::default().fg(Color::White).bg(Color::Black))
                     .alignment(Alignment::Center)
                     .wrap(Wrap { trim: true });
-                f.render_widget(paragraph1, chunks[1]);
 
-                let block3 = Block::default().title("Results").borders(Borders::ALL);
-                let paragraph2 = Paragraph::new(current_content)
-                    .block(block3)
+                let paragraph2 = Paragraph::new(CURRENT_CONTENT.inner().clone())
+                    .block(Block::default().title("Results").borders(Borders::ALL))
                     .style(Style::default().fg(Color::White).bg(Color::Black))
                     .alignment(Alignment::Center)
                     .wrap(Wrap { trim: true });
-                f.render_widget(paragraph2, chunks[2]);
+
+                f.render_widget(choices_block, api_and_search_box[0]);
+                f.render_widget(search_area, api_and_search_box[1]);
+                f.render_widget(paragraph2, big_blocks[1]);
             })
             .unwrap();
     }
-    Ok(())
 }
 
 // tui layout might look something like this

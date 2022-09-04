@@ -1,84 +1,54 @@
+use std::{
+    sync::{Mutex, MutexGuard},
+};
+
 pub const API_KEY: &str = include_str!("..\\key.txt");
 
 pub const EXCHANGE_CODES: [&str; 72] = [
-  "AS",
-  "AT",
-  "AX",
-  "BA",
-  "BC",
-  "BD",
-  "BE",
-  "BK",
-  "BO",
-  "BR",
-  "CA",
-  "CN",
-  "CO",
-  "CR",
-  "DB",
-  "DE",
-  "DU",
-  "F",
-  "HE",
-  "HK",
-  "HM",
-  "IC",
-  "IR",
-  "IS",
-  "JK",
-  "JO",
-  "KL",
-  "KQ",
-  "KS",
-  "L",
-  "LN",
-  "LS",
-  "MC",
-  "ME",
-  "MI",
-  "MU",
-  "MX",
-  "NE",
-  "NL",
-  "NS",
-  "NZ",
-  "OL",
-  "PA",
-  "PM",
-  "PR",
-  "QA",
-  "RG",
-  "SA",
-  "SG",
-  "SI",
-  "SN",
-  "SR",
-  "SS",
-  "ST",
-  "SW",
-  "SZ",
-  "T",
-  "TA",
-  "TL",
-  "TO",
-  "TW",
-  "TWO",
-  "US",
-  "V",
-  "VI",
-  "VN",
-  "VS",
-  "WA",
-  "HA",
-  "SX",
-  "TG",
-  "SC"
+    "AS", "AT", "AX", "BA", "BC", "BD", "BE", "BK", "BO", "BR", "CA", "CN", "CO", "CR", "DB", "DE",
+    "DU", "F", "HE", "HK", "HM", "IC", "IR", "IS", "JK", "JO", "KL", "KQ", "KS", "L", "LN", "LS",
+    "MC", "ME", "MI", "MU", "MX", "NE", "NL", "NS", "NZ", "OL", "PA", "PM", "PR", "QA", "RG", "SA",
+    "SG", "SI", "SN", "SR", "SS", "ST", "SW", "SZ", "T", "TA", "TL", "TO", "TW", "TWO", "US", "V",
+    "VI", "VN", "VS", "WA", "HA", "SX", "TG", "SC",
 ];
 
+pub struct GlobalString(Mutex<String>);
+
+impl GlobalString {
+    pub const fn new() -> Self {
+        Self(Mutex::new(String::new()))
+    }
+    pub fn inner(&self) -> MutexGuard<'_, std::string::String> {
+        self.0.lock().unwrap()
+    }
+}
+
+// impl Deref for SearchString {
+//     type Target = String;
+
+//     fn deref(&self) -> &Self::Target {
+//         &self.0.lock().unwrap()
+//     }
+// }
+
+// impl DerefMut for SearchString {
+//     fn deref_mut(&mut self) -> &mut Self::Target {
+//         &mut self.0.lock().unwrap()
+//     }
+// }
+
+pub static SEARCH_STRING: GlobalString = GlobalString(Mutex::new(String::new()));
+pub static CURRENT_CONTENT: GlobalString = GlobalString(Mutex::new(String::new()));
+
 pub mod app {
-    use std::fmt::Debug;
+    use std::{
+        fmt::Debug,
+        fs::File,
+        io::{Read, Write},
+    };
 
     use anyhow::{Context, Error};
+    use crossterm::event::{read, Event, KeyCode, KeyEvent};
     use reqwest::blocking::Client;
     use serde::de::DeserializeOwned;
     use tui::{
@@ -86,24 +56,85 @@ pub mod app {
         text::Span,
     };
 
-    use crate::{api::{CompanyProfile, StockSymbol}, API_KEY, EXCHANGE_CODES};
+    use crate::{
+        api::{CompanyProfile, StockSymbol},
+        API_KEY, CURRENT_CONTENT, EXCHANGE_CODES, SEARCH_STRING,
+    };
 
     pub struct FinanceClient {
         pub url: String,
         pub client: Client,
-        pub search_string: String,   // push + pop // MSFT
-        pub current_content: String, // Results etc. of searches
+        //pub search_string: String,   // push + pop // MSFT
+        //pub current_content: String, // Results etc. of searches
         pub choice: ApiChoice,
         pub current_market: String,
-        pub companies: Vec<(String, String)>
+        pub companies: Vec<(String, String)>,
+    }
+
+    impl Default for FinanceClient {
+        fn default() -> Self {
+            FinanceClient {
+                url: "https://finnhub.io/api/v1/".to_string(),
+                client: Client::default(),
+                //search_string: String::new(),
+                //current_content: String::new(),
+                choice: ApiChoice::CompanyProfile,
+                current_market: "US".to_string(),
+                companies: Vec::new(),
+            }
+        }
     }
 
     /// Vec<StockSymbol>
     impl FinanceClient {
-        pub fn single_request<T: DeserializeOwned + Debug>(
-            &self,
-            url: String,
-        ) -> Result<T, Error> {
+        pub fn handle_event(&mut self) {
+            match read().unwrap() {
+                Event::Key(key_event) => {
+                    let KeyEvent {
+                        code, modifiers, ..
+                    } = key_event;
+                    // Typing event
+                    match (code, modifiers) {
+                        (KeyCode::Char(c), _) => {
+                            SEARCH_STRING.inner().push(c);
+                        }
+                        (KeyCode::Esc, _) => {
+                            SEARCH_STRING.inner().clear();
+                        }
+                        (KeyCode::Backspace, _) => {
+                            SEARCH_STRING.inner().pop();
+                        }
+                        (KeyCode::Enter, _) => match self.choice {
+                            ApiChoice::CompanyProfile => {
+                                *CURRENT_CONTENT.inner() = match self.company_profile() {
+                                    Ok(search_result) => search_result,
+                                    Err(e) => e.to_string(),
+                                }
+                            }
+                            ApiChoice::GetMarket => {
+                                *CURRENT_CONTENT.inner() = self.choose_market();
+                            }
+                            _ => {}
+                        },
+                        (KeyCode::Tab, _) => {
+                            self.switch();
+                        }
+                        (_, _) => {}
+                    }
+                }
+                Event::Mouse(_) => {}
+                Event::Resize(num1, num2) => {
+                    println!("Window has been resized to {num1}, {num2}");
+                }
+                Event::Paste(_s) => {}
+                _ => {}
+            }
+            if self.choice == ApiChoice::SymbolSearch && !SEARCH_STRING.inner().is_empty() {
+                *CURRENT_CONTENT.inner() = self.company_search(&SEARCH_STRING.inner());
+            }
+        }
+
+        pub fn single_request<T: DeserializeOwned + Debug>(&self, url: String) -> Result<T, Error> {
             let response = self
                 .client
                 .get(url)
@@ -115,7 +146,7 @@ pub mod app {
             let finnhub_reply: T = serde_json::from_str(&text).with_context(|| {
                 format!(
                     "Couldn't deserialize {} into CompanyProfile struct.\nText from Finnhub: '{text}'",
-                    self.search_string
+                    SEARCH_STRING.inner()
                 )
             })?;
             Ok(finnhub_reply)
@@ -136,7 +167,7 @@ pub mod app {
             let finnhub_reply: Vec<T> = serde_json::from_str(&text).with_context(|| {
                 format!(
                     "Couldn't deserialize {} into CompanyProfile struct.\nText from Finnhub: '{text}'",
-                    self.search_string
+                    SEARCH_STRING.inner()
                 )
             })?;
             Ok(finnhub_reply)
@@ -159,41 +190,76 @@ pub mod app {
 
         /// /stock/profile?symbol=AAPL
         pub fn company_profile(&self) -> Result<String, Error> {
-            let url = format!("{}/stock/profile2?symbol={}", self.url, self.search_string);
+            let url = format!(
+                "{}/stock/profile2?symbol={}",
+                self.url,
+                SEARCH_STRING.inner()
+            );
             let company_info = self.single_request::<CompanyProfile>(url)?;
             Ok(company_info.to_string())
         }
 
         /// /stock/symbol?exchange=US
         pub fn stock_symbols(&self) -> Result<Vec<StockSymbol>, Error> {
-            let url = format!("{}/stock/symbol?exchange={}", self.url, self.current_market);
-            let stock_symbols = self.multi_request::<StockSymbol>(url)?;
-            Ok(stock_symbols)
+            match File::open("stock_symbols.json") {
+                Ok(mut existing_file) => {
+                    let mut stock_symbol_string = String::new();
+                    existing_file
+                        .read_to_string(&mut stock_symbol_string)
+                        .unwrap();
+                    let stock_symbols: Vec<StockSymbol> =
+                        serde_json::from_str(&stock_symbol_string).unwrap();
+                    Ok(stock_symbols)
+                }
+                Err(_) => {
+                    let url = format!("{}/stock/symbol?exchange={}", self.url, self.current_market);
+
+                    let response = self
+                        .client
+                        .get(url)
+                        .header("X-Finnhub-Token", API_KEY)
+                        .send()
+                        .with_context(|| "Couldn't send via client")?;
+                    let text = response.text().with_context(|| "No text for some reason")?;
+
+                    let mut new_file = File::create("stock_symbols.json").unwrap();
+                    write!(&mut new_file, "{}", text).unwrap();
+
+                    let stock_symbols: Vec<StockSymbol> = serde_json::from_str(&text).unwrap();
+                    Ok(stock_symbols)
+                }
+            }
         }
 
         /// User hits enter, checks to see if market exists, if not, stay w
         pub fn choose_market(&mut self) -> String {
-            match EXCHANGE_CODES.iter().find(|code| **code == self.search_string) {
+            match EXCHANGE_CODES
+                .iter()
+                .find(|code| **code == *SEARCH_STRING.inner())
+            {
                 // e.g. user types "US", which is valid
                 Some(good_market_code) => {
                     self.current_market = good_market_code.to_string();
                     match self.stock_symbols() {
                         Ok(stock_symbols) => {
-                            self.companies = stock_symbols.into_iter().map(|info| {
-                            (info.description,
-                                    info.display_symbol)
-                            }).collect::<Vec<(String, String)>>();
-                            format!("Successfully got company info from market {}", self.current_market)
+                            self.companies = stock_symbols
+                                .into_iter()
+                                .map(|info| (info.description, info.display_symbol))
+                                .collect::<Vec<(String, String)>>();
+                            format!(
+                                "Successfully got company info from market {}",
+                                self.current_market
+                            )
                         }
                         Err(_) => {
-                            format!("No market called {} exists", self.search_string)
+                            format!("No market called {} exists", SEARCH_STRING.inner())
                         }
                     }
                 }
                 // user types something that isn't a market
-                None => format!("No market called {} exists", self.search_string)
+                None => format!("No market called {} exists", SEARCH_STRING.inner()),
+            }
         }
-    }
 
         /// company-news?symbol=AAPL&from=2021-09-01&to=2021-09-09
         /// Required: date + symbol
@@ -215,7 +281,7 @@ pub mod app {
                 StockSymbol => MarketNews,
                 MarketNews => CompanyNews,
                 CompanyNews => GetMarket,
-                GetMarket => SymbolSearch
+                GetMarket => SymbolSearch,
             }
         }
 
@@ -228,7 +294,7 @@ pub mod app {
                 StockSymbol,
                 MarketNews,
                 CompanyNews,
-                GetMarket
+                GetMarket,
             ];
             let choices = choices.into_iter().map(|choice| choice.to_string());
 
@@ -244,10 +310,7 @@ pub mod app {
                                 .add_modifier(Modifier::UNDERLINED),
                         )
                     } else {
-                        Span::styled(
-                            format!(" {choice_string} "),
-                            Style::default(),
-                        )
+                        Span::styled(format!(" {choice_string} "), Style::default())
                     }
                 })
                 .collect::<Vec<_>>()
@@ -261,7 +324,7 @@ pub mod app {
         StockSymbol,
         MarketNews,
         CompanyNews,
-        GetMarket
+        GetMarket,
     }
 
     impl std::fmt::Display for ApiChoice {
@@ -273,12 +336,11 @@ pub mod app {
                 StockSymbol => "Stock symbol",
                 MarketNews => "News",
                 CompanyNews => "Company news",
-                GetMarket => "Get market"
+                GetMarket => "Get market",
             };
             write!(f, "{}", output)
         }
     }
-
 }
 
 /// Structs and enums for the Finnhub API.
