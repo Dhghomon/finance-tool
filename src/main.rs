@@ -1,7 +1,6 @@
-use finance_tool::{
-    app::FinanceClient,
-    CURRENT_CONTENT, SEARCH_STRING,
-};
+use std::io::Stdout;
+
+use finance_tool::{app::FinanceClient, Window, CURRENT_CONTENT, SEARCH_STRING};
 use tui::{
     backend::CrosstermBackend,
     layout::{Alignment, Constraint, Direction, Layout},
@@ -22,85 +21,99 @@ enum ClientError {
 
 // const COMPANY_STR: &str = include_str!("../company_symbols.json");
 
-// todo! Divide into four
-// 1) init
-// 2) read
-// 3) update
-// 4) draw
-
-// #[derive(Debug)]
-// struct CompanyInfo {
-//     name: String,
-//     symbol: String
-// }
-
-enum Window {
-    ApiChoice,
-    Search,
-    Results,
-}
-
-// Ideal layout looks more like this:
-
-// ┌ Company symbol  Company info  Stock symbol ─────────  │    Search for:─
-// │                                                                          │
-// └─News ──────────Company news  Get market───────────────│
-// ┌                                    ─│                  │
-// │                                                                          │
-// └──────────────────────────────────────────────────────────────────────────┘
-
-// ┌Results───────────────────────────────────────────────────────────────────┐
-// │                                                                          │
-// │                                                                          │
-// │                                                                          │
-// │                                                                          │
-// │                                                                          │
-// │                                                                          │
-// │                                                                          │
-// │                                                                          │
-// │                                                                          │
-// │                                                                          │
-// └──────────────────────────────────────────────────────────────────────────┘
-
-fn make_table(all_choices: Vec<Span>) -> Table<'static> {
+fn make_table(all_choices: Vec<Span>) -> Table {
     let all_rows = all_choices
         .chunks(3)
-        .map(|choices| {
-            let mut row_title_vec = vec![];
-            let mut choice_iter = choices.iter();
-            for title in choice_iter.by_ref() {
-                row_title_vec.push(&title.content)
-            }
-            row_title_vec
-        });
-
-    let into_rows = all_rows
-        .map(|not_yet_rows| {
-            let vec_of_strings = not_yet_rows
-                .into_iter()
-                .map(|single_item| single_item.to_string())
-                .collect::<Vec<String>>();
-            Row::new(vec_of_strings)
+        .map(|not_yet_row| {
+            let as_vec = not_yet_row.to_vec();
+            Row::new(as_vec)
         })
-        .collect::<Vec<Row>>();
+        .collect::<Vec<_>>();
 
-    Table::new(into_rows)
-    // You can set the style of the entire Table.
-    .style(Style::default().fg(Color::White))
-    // As any other widget, a Table can be wrapped in a Block.
-    .block(Block::default().title("Api choices").borders(Borders::ALL))
-    // Columns widths are constrained in the same way as Layout...
-    .widths(&[
-        Constraint::Percentage(33),
-        Constraint::Percentage(33),
-        Constraint::Percentage(34),
-    ])
-    // ...and they can be separated by a fixed spacing.
-    .column_spacing(1)
-    // If you wish to highlight a row in any specific way when it is selected...
-    .highlight_style(Style::default().add_modifier(Modifier::BOLD))
-    // ...and potentially show a symbol in front of the selection.
-    .highlight_symbol(">>")
+    Table::new(all_rows)
+        // You can set the style of the entire Table.
+        .style(Style::default().fg(Color::White))
+        // As any other widget, a Table can be wrapped in a Block.
+        .block(Block::default().title("Api choices").borders(Borders::ALL))
+        // Columns widths are constrained in the same way as Layout...
+        .widths(&[
+            Constraint::Percentage(33),
+            Constraint::Percentage(33),
+            Constraint::Percentage(34),
+        ])
+        // ...and they can be separated by a fixed spacing.
+        .column_spacing(1)
+        // If you wish to highlight a row in any specific way when it is selected...
+        .highlight_style(Style::default().add_modifier(Modifier::BOLD))
+        // ...and potentially show a symbol in front of the selection.
+        .highlight_symbol(">>")
+}
+
+pub fn draw_terminal(terminal: &mut Terminal<CrosstermBackend<Stdout>>, client: &FinanceClient) {
+    terminal
+        .draw(|f| {
+            // First 2 big blocks
+            let top_and_bottom = Layout::default()
+                .direction(Direction::Vertical)
+                .margin(3)
+                .constraints(
+                    [
+                        Constraint::Percentage(40), // api and search box
+                        Constraint::Percentage(60), // Results
+                    ]
+                    .as_ref(),
+                )
+                .split(f.size());
+
+            // 2 Rects
+            let api_and_search_box = Layout::default()
+                .direction(Direction::Horizontal)
+                .constraints([Constraint::Percentage(70), Constraint::Percentage(30)].as_ref())
+                .split(top_and_bottom[0]);
+
+            let highlighted = Style::default().fg(Color::LightYellow);
+            let unhighlighted = Style::default();
+            let api_choice_border_style = match client.current_window {
+                Window::ApiChoice => highlighted,
+                Window::Results => unhighlighted,
+            };
+
+            let results_border_style = match client.current_window {
+                Window::Results => highlighted,
+                Window::ApiChoice => unhighlighted,
+            };
+
+            // Api choices: top left block
+            let api_choices = make_table(client.all_choices()).block(
+                Block::default()
+                    .title("Api search")
+                    .borders(Borders::ALL)
+                    .border_style(api_choice_border_style),
+            );
+
+            // Search window: top right block
+            let search_area = Paragraph::new(SEARCH_STRING.inner().clone())
+                .block(Block::default().title("Search for:").borders(Borders::ALL))
+                .style(Style::default().fg(Color::White).bg(Color::Black))
+                .alignment(Alignment::Center)
+                .wrap(Wrap { trim: true });
+
+            let results = Paragraph::new(CURRENT_CONTENT.inner().clone())
+                .block(
+                    Block::default()
+                        .title("Results")
+                        .borders(Borders::ALL)
+                        .border_style(results_border_style),
+                )
+                .style(Style::default().fg(Color::White).bg(Color::Black))
+                .alignment(Alignment::Center)
+                .wrap(Wrap { trim: true });
+
+            f.render_widget(api_choices, api_and_search_box[0]);
+            f.render_widget(search_area, api_and_search_box[1]);
+            f.render_widget(results, top_and_bottom[1]);
+        })
+        .unwrap();
 }
 
 fn main() -> Result<(), anyhow::Error> {
@@ -116,64 +129,13 @@ fn main() -> Result<(), anyhow::Error> {
         .map(|info| (info.description, info.display_symbol))
         .collect::<Vec<(String, String)>>();
 
-    // Input
-    // State change / enum, char+, char-
-    // Draw
+    terminal.clear().unwrap();
+    draw_terminal(&mut terminal, &client);
 
     loop {
         // Handles key events and decides what to do
         client.handle_event();
         terminal.clear().unwrap();
-        terminal
-            .draw(|f| {
-                // First 2 big blocks
-                let big_blocks = Layout::default()
-                    .direction(Direction::Vertical)
-                    .margin(3)
-                    .constraints(
-                        [
-                            Constraint::Percentage(40), // api and search box
-                            Constraint::Percentage(60), // Results
-                        ]
-                        .as_ref(),
-                    )
-                    .split(f.size());
-
-                // 2 Rects
-                let api_and_search_box = Layout::default()
-                    .direction(Direction::Horizontal)
-                    .constraints([Constraint::Percentage(70), Constraint::Percentage(30)].as_ref())
-                    .split(big_blocks[0]);
-
-                // Api choices: top left block
-                let all_choices = client.all_choices();
-                let choices_block = make_table(all_choices);
-
-                // Search window: top right block
-                let search_area = Paragraph::new(SEARCH_STRING.inner().clone())
-                    .block(Block::default().title("Search for:").borders(Borders::ALL))
-                    .style(Style::default().fg(Color::White).bg(Color::Black))
-                    .alignment(Alignment::Center)
-                    .wrap(Wrap { trim: true });
-
-                let paragraph2 = Paragraph::new(CURRENT_CONTENT.inner().clone())
-                    .block(Block::default().title("Results").borders(Borders::ALL))
-                    .style(Style::default().fg(Color::White).bg(Color::Black))
-                    .alignment(Alignment::Center)
-                    .wrap(Wrap { trim: true });
-
-                f.render_widget(choices_block, api_and_search_box[0]);
-                f.render_widget(search_area, api_and_search_box[1]);
-                f.render_widget(paragraph2, big_blocks[1]);
-            })
-            .unwrap();
+        draw_terminal(&mut terminal, &client);
     }
 }
-
-// tui layout might look something like this
-
-// FINANCE TOOL
-// COMPANY DATA || Market cap || This week's news
-// STOCK DATA   || One stock data || Weekly data
-// SEARCH COMPANY
-// Company profile

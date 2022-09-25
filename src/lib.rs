@@ -1,6 +1,4 @@
-use std::{
-    sync::{Mutex, MutexGuard},
-};
+use std::sync::{Mutex, MutexGuard};
 
 pub const API_KEY: &str = include_str!("..\\key.txt");
 
@@ -12,6 +10,12 @@ pub const EXCHANGE_CODES: [&str; 72] = [
     "VI", "VN", "VS", "WA", "HA", "SX", "TG", "SC",
 ];
 
+#[derive(PartialEq, Eq)]
+pub enum Window {
+    ApiChoice,
+    Results,
+}
+
 pub struct GlobalString(Mutex<String>);
 
 impl GlobalString {
@@ -22,20 +26,6 @@ impl GlobalString {
         self.0.lock().unwrap()
     }
 }
-
-// impl Deref for SearchString {
-//     type Target = String;
-
-//     fn deref(&self) -> &Self::Target {
-//         &self.0.lock().unwrap()
-//     }
-// }
-
-// impl DerefMut for SearchString {
-//     fn deref_mut(&mut self) -> &mut Self::Target {
-//         &mut self.0.lock().unwrap()
-//     }
-// }
 
 pub static SEARCH_STRING: GlobalString = GlobalString(Mutex::new(String::new()));
 pub static CURRENT_CONTENT: GlobalString = GlobalString(Mutex::new(String::new()));
@@ -52,21 +42,61 @@ pub mod app {
     use reqwest::blocking::Client;
     use serde::de::DeserializeOwned;
     use tui::{
-        style::{Color, Modifier, Style},
+        style::{Color, Style},
         text::Span,
     };
 
     use crate::{
         api::{CompanyProfile, StockSymbol},
-        API_KEY, CURRENT_CONTENT, EXCHANGE_CODES, SEARCH_STRING,
+        Window, API_KEY, CURRENT_CONTENT, EXCHANGE_CODES, SEARCH_STRING,
     };
+
+    pub struct TotalApiChoices {
+        pub all_apis: Vec<ApiChoice>,
+        pub current_index: usize,
+    }
+
+    impl Default for TotalApiChoices {
+        fn default() -> Self {
+            Self {
+                all_apis: vec![
+                    ApiChoice::SymbolSearch,
+                    ApiChoice::CompanyProfile,
+                    ApiChoice::StockSymbol,
+                    ApiChoice::MarketNews,
+                    ApiChoice::CompanyNews,
+                    ApiChoice::GetMarket,
+                ],
+                current_index: 0,
+            }
+        }
+    }
+
+    impl TotalApiChoices {
+        pub fn left(&mut self) {
+            self.current_index = match self.current_index.checked_sub(1) {
+                Some(okay_number) => okay_number,
+                None => self.all_apis.len() - 1,
+            };
+        }
+        pub fn right(&mut self) {
+            let next_number = self.current_index + 1;
+            self.current_index = if next_number > (self.all_apis.len() - 1) {
+                0
+            } else {
+                next_number
+            };
+        }
+        pub fn current_api(&self) -> ApiChoice {
+            self.all_apis[self.current_index]
+        }
+    }
 
     pub struct FinanceClient {
         pub url: String,
         pub client: Client,
-        //pub search_string: String,   // push + pop // MSFT
-        //pub current_content: String, // Results etc. of searches
-        pub choice: ApiChoice,
+        pub current_window: Window,
+        pub api_choices: TotalApiChoices,
         pub current_market: String,
         pub companies: Vec<(String, String)>,
     }
@@ -76,9 +106,8 @@ pub mod app {
             FinanceClient {
                 url: "https://finnhub.io/api/v1/".to_string(),
                 client: Client::default(),
-                //search_string: String::new(),
-                //current_content: String::new(),
-                choice: ApiChoice::CompanyProfile,
+                current_window: Window::ApiChoice,
+                api_choices: TotalApiChoices::default(),
                 current_market: "US".to_string(),
                 companies: Vec::new(),
             }
@@ -87,6 +116,10 @@ pub mod app {
 
     /// Vec<StockSymbol>
     impl FinanceClient {
+        pub fn api_choice(&self) -> ApiChoice {
+            self.api_choices.current_api()
+        }
+
         pub fn handle_event(&mut self) {
             match read().unwrap() {
                 Event::Key(key_event) => {
@@ -104,7 +137,7 @@ pub mod app {
                         (KeyCode::Backspace, _) => {
                             SEARCH_STRING.inner().pop();
                         }
-                        (KeyCode::Enter, _) => match self.choice {
+                        (KeyCode::Enter, _) => match self.api_choice() {
                             ApiChoice::CompanyProfile => {
                                 *CURRENT_CONTENT.inner() = match self.company_profile() {
                                     Ok(search_result) => search_result,
@@ -116,8 +149,18 @@ pub mod app {
                             }
                             _ => {}
                         },
+                        (KeyCode::Left, _) => {
+                            if self.current_window == Window::ApiChoice {
+                                self.api_choices.left();
+                            }
+                        }
+                        (KeyCode::Right, _) => {
+                            if self.current_window == Window::ApiChoice {
+                                self.api_choices.right();
+                            }
+                        }
                         (KeyCode::Tab, _) => {
-                            self.switch();
+                            self.switch_window();
                         }
                         (_, _) => {}
                     }
@@ -129,7 +172,7 @@ pub mod app {
                 Event::Paste(_s) => {}
                 _ => {}
             }
-            if self.choice == ApiChoice::SymbolSearch && !SEARCH_STRING.inner().is_empty() {
+            if self.api_choice() == ApiChoice::SymbolSearch && !SEARCH_STRING.inner().is_empty() {
                 *CURRENT_CONTENT.inner() = self.company_search(&SEARCH_STRING.inner());
             }
         }
@@ -188,8 +231,8 @@ pub mod app {
                 .collect::<String>()
         }
 
-        /// /stock/profile?symbol=AAPL
         pub fn company_profile(&self) -> Result<String, Error> {
+            // /stock/profile?symbol=AAPL
             let url = format!(
                 "{}/stock/profile2?symbol={}",
                 self.url,
@@ -273,44 +316,25 @@ pub mod app {
             todo!()
         }
 
-        pub fn switch(&mut self) {
-            use ApiChoice::*;
-            self.choice = match self.choice {
-                SymbolSearch => CompanyProfile,
-                CompanyProfile => StockSymbol,
-                StockSymbol => MarketNews,
-                MarketNews => CompanyNews,
-                CompanyNews => GetMarket,
-                GetMarket => SymbolSearch,
+        pub fn switch_window(&mut self) {
+            self.current_window = match self.current_window {
+                Window::ApiChoice => Window::Results,
+                Window::Results => Window::ApiChoice,
             }
         }
 
         // todo!() turn this into Tables: 3*3 and then later 4*4
         pub fn all_choices(&self) -> Vec<Span> {
-            use ApiChoice::*; // SymbolSearch
-            let choices = [
-                SymbolSearch,
-                CompanyProfile,
-                StockSymbol,
-                MarketNews,
-                CompanyNews,
-                GetMarket,
-            ];
-            let choices = choices.into_iter().map(|choice| choice.to_string());
+            let choices = &self.api_choices.all_apis;
 
             choices
-                .into_iter()
-                .map(|choice_string| {
-                    let current_choice = format!("{}", self.choice);
-                    if choice_string == current_choice {
-                        Span::styled(
-                            format!(" {choice_string} "),
-                            Style::default()
-                                .bg(Color::Gray)
-                                .add_modifier(Modifier::UNDERLINED),
-                        )
+                .iter()
+                .enumerate()
+                .map(|(index, api_name)| {
+                    if self.api_choices.current_index == index {
+                        Span::styled(format!("{api_name}"), Style::default().bg(Color::Gray))
                     } else {
-                        Span::styled(format!(" {choice_string} "), Style::default())
+                        Span::styled(format!("{api_name}"), Style::default().bg(Color::Black))
                     }
                 })
                 .collect::<Vec<_>>()
@@ -331,12 +355,12 @@ pub mod app {
         fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
             use ApiChoice::*;
             let output = match self {
-                SymbolSearch => "Company symbol",
-                CompanyProfile => "Company info",
-                StockSymbol => "Stock symbol",
-                MarketNews => "News",
-                CompanyNews => "Company news",
-                GetMarket => "Get market",
+                SymbolSearch => "Symbol Search",
+                CompanyProfile => "Company Profile",
+                StockSymbol => "Stock Symbol",
+                MarketNews => "Market News",
+                CompanyNews => "Company News",
+                GetMarket => "Get Market",
             };
             write!(f, "{}", output)
         }
