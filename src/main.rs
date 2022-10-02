@@ -123,19 +123,14 @@ fn main() -> Result<(), anyhow::Error> {
 
     let mut client = FinanceClient::default();
 
-    let stock_symbols = client.stock_symbols()?;
-    client.companies = stock_symbols
-        .into_iter()
-        .map(|info| (info.description, info.display_symbol))
-        .collect::<Vec<(String, String)>>();
-
-    terminal.clear().unwrap();
+    client.stock_symbols_init()?;
+    terminal.clear()?;
     draw_terminal(&mut terminal, &client);
 
     loop {
         // Handles key events and decides what to do
         client.handle_event();
-        terminal.clear().unwrap();
+        terminal.clear()?;
         draw_terminal(&mut terminal, &client);
     }
 }
