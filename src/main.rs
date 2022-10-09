@@ -10,6 +10,13 @@ use tui::{
     Terminal,
 };
 
+// lazy_static::lazy_static!{
+//     static ref CLIENT: FinanceClient = FinanceClient { client: ::, current_window: (), api_choices: (), current_market: (), companies: () }
+// };
+
+// Company news
+// Small window for error / debug messages
+
 /// Select Market
 ///
 enum Market {}
