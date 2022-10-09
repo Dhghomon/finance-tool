@@ -1,6 +1,6 @@
 use std::io::Stdout;
 
-use finance_tool::{app::FinanceClient, Window, CURRENT_CONTENT, SEARCH_STRING};
+use finance_tool::{app::State, Window, CURRENT_CONTENT, SEARCH_STRING};
 use tui::{
     backend::CrosstermBackend,
     layout::{Alignment, Constraint, Direction, Layout},
@@ -9,10 +9,6 @@ use tui::{
     widgets::{Block, Borders, Paragraph, Row, Table, Wrap},
     Terminal,
 };
-
-// lazy_static::lazy_static!{
-//     static ref CLIENT: FinanceClient = FinanceClient { client: ::, current_window: (), api_choices: (), current_market: (), companies: () }
-// };
 
 // Company news
 // Small window for error / debug messages
@@ -56,7 +52,8 @@ fn make_table(all_choices: Vec<Span>) -> Table {
         .highlight_symbol(">>")
 }
 
-pub fn draw_terminal(terminal: &mut Terminal<CrosstermBackend<Stdout>>, client: &FinanceClient) {
+pub fn draw_terminal(terminal: &mut Terminal<CrosstermBackend<Stdout>>, state: &State) {
+
     terminal
         .draw(|f| {
             // First 2 big blocks
@@ -80,18 +77,18 @@ pub fn draw_terminal(terminal: &mut Terminal<CrosstermBackend<Stdout>>, client: 
 
             let highlighted = Style::default().fg(Color::LightYellow);
             let unhighlighted = Style::default();
-            let api_choice_border_style = match client.current_window {
+            let api_choice_border_style = match state.current_window {
                 Window::ApiChoice => highlighted,
                 Window::Results => unhighlighted,
             };
 
-            let results_border_style = match client.current_window {
+            let results_border_style = match state.current_window {
                 Window::Results => highlighted,
                 Window::ApiChoice => unhighlighted,
             };
 
             // Api choices: top left block
-            let api_choices = make_table(client.all_choices()).block(
+            let api_choices = make_table(state.all_choices()).block(
                 Block::default()
                     .title("Api search")
                     .borders(Borders::ALL)
@@ -128,16 +125,16 @@ fn main() -> Result<(), anyhow::Error> {
     let backend = CrosstermBackend::new(stdout);
     let mut terminal = Terminal::new(backend)?;
 
-    let mut client = FinanceClient::default();
+    let mut state = State::default();
 
-    client.stock_symbols_init()?;
+    state.stock_symbols_init()?;
     terminal.clear()?;
-    draw_terminal(&mut terminal, &client);
+    draw_terminal(&mut terminal, &state);
 
     loop {
         // Handles key events and decides what to do
-        client.handle_event();
+        state.handle_event();
         terminal.clear()?;
-        draw_terminal(&mut terminal, &client);
+        draw_terminal(&mut terminal, &state);
     }
 }
