@@ -2,6 +2,8 @@ Just a tool to get financial data and display it somehow, probably using tui. So
 
 Todo: 
 
+- Big todo: Change to channel implementation. State and FinanceApi sit in their own threads and receive and send commands. State simply receives commands, updates itself and draws. If it gets an API call request then it send it to FinanceApi and redraws. Once FinanceApi is done then it sends the command to State which will then update the request window. End result is no more waiting for long api calls. Compiles again, still WIP with many todo()! in places for methods that haven't been uncommented yet
+
 - Allow API choice on top left block via arrow keys - partially done (left + right keys work) Add up and down later
 - Find company automatically instead of having to remember symbol and moving to company profile to manually type in
 - Now has default info if market doesn't change so probably don't need to bring in default info for a bunch of markets. todo: think about *maybe* a scoped thread for this call because it takes a long time

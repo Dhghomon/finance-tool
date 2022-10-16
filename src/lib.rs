@@ -1,15 +1,18 @@
 use std::{
     fmt::Debug,
-    sync::{Mutex, MutexGuard},
+    sync::{mpsc::SyncSender, Mutex, MutexGuard},
 };
+
+use app::Command;
+use crossterm::event::{read, Event, KeyEvent};
 
 use crate::app::FinanceClient;
 
 pub const API_KEY: &str = include_str!("..\\key.txt");
 
-lazy_static::lazy_static!{
-    static ref CLIENT: FinanceClient = FinanceClient::default();
-}
+// lazy_static::lazy_static!{
+//     static ref CLIENT: FinanceClient = FinanceClient::default();
+// }
 
 pub const EXCHANGE_CODES: [&str; 72] = [
     "AS", "AT", "AX", "BA", "BC", "BD", "BE", "BK", "BO", "BR", "CA", "CN", "CO", "CR", "DB", "DE",
@@ -27,35 +30,36 @@ pub enum Window {
     Results,
 }
 
-pub struct GlobalString(Mutex<String>);
+// pub struct GlobalString(Mutex<String>);
 
-impl GlobalString {
-    pub const fn new() -> Self {
-        Self(Mutex::new(String::new()))
-    }
-    pub fn inner(&self) -> MutexGuard<'_, std::string::String> {
-        self.0.lock().unwrap()
-    }
-}
+// impl GlobalString {
+//     pub const fn new() -> Self {
+//         Self(Mutex::new(String::new()))
+//     }
+//     pub fn inner(&self) -> MutexGuard<'_, std::string::String> {
+//         self.0.lock().unwrap()
+//     }
+// }
 
-pub fn debug(message: impl Debug) {
-    match std::env::args().nth(1) {
-        Some(arg) if &arg == "debug" => {
-            let message_string = format!("{message:?}");
-            *CURRENT_CONTENT.inner() = message_string;
-        }
-        _ => {}
-    }
-}
+// pub fn debug(message: impl Debug) {
+//     match std::env::args().nth(1) {
+//         Some(arg) if &arg == "debug" => {
+//             let message_string = format!("{message:?}");
+//             *CURRENT_CONTENT.inner() = message_string;
+//         }
+//         _ => {}
+//     }
+// }
 
-pub static SEARCH_STRING: GlobalString = GlobalString(Mutex::new(String::new()));
-pub static CURRENT_CONTENT: GlobalString = GlobalString(Mutex::new(String::new()));
+// pub static SEARCH_STRING: GlobalString = GlobalString(Mutex::new(String::new()));
+// pub static CURRENT_CONTENT: GlobalString = GlobalString(Mutex::new(String::new()));
 
 pub mod app {
     use std::{
         fmt::Debug,
         fs::File,
-        io::{Read, Write},
+        io::{Read, Stdout, Write},
+        sync::mpsc::{Receiver, SyncSender},
     };
 
     use anyhow::{Context, Error};
@@ -66,14 +70,99 @@ pub mod app {
     };
     use serde::de::DeserializeOwned;
     use tui::{
-        style::{Color, Style},
+        backend::CrosstermBackend,
+        layout::{Alignment, Constraint, Direction, Layout},
+        style::{Color, Style, Modifier},
         text::Span,
+        widgets::{Block, Borders, Paragraph, Row, Table, Wrap},
+        Terminal,
     };
 
     use crate::{
         api::{CompanyProfile, MarketNews, StockSymbol},
-        debug, Window, API_KEY, CURRENT_CONTENT, EXCHANGE_CODES, FINNHUB_URL, SEARCH_STRING, CLIENT,
+        Window, API_KEY, EXCHANGE_CODES, FINNHUB_URL,
     };
+
+    pub fn handle_event2(sender: &SyncSender<Command>) {
+        match read().unwrap() {
+            Event::Key(key_event) => {
+                let KeyEvent {
+                    code, modifiers, ..
+                } = key_event;
+                // Typing event
+                match (code, modifiers) {
+                    (KeyCode::Char(c), _) => {
+                        sender.send(Command::Char(c)).unwrap();
+                        //SEARCH_STRING.inner().push(c);
+                    }
+                    (KeyCode::Esc, _) => {
+                        sender.send(Command::Esc).unwrap();
+                        //SEARCH_STRING.inner().clear();
+                    }
+                    (KeyCode::Backspace, _) => {
+                        sender.send(Command::Backspace).unwrap();
+                        //SEARCH_STRING.inner().pop();
+                    }
+                    (KeyCode::Enter, _) => {
+                        sender.send(Command::Enter).unwrap();
+                    }
+
+                    // (KeyCode::Enter, _) => match self.api_choice() {
+                    //     ApiChoice::CompanyProfile => {
+                    //         let url = format!(
+                    //             "{FINNHUB_URL}/stock/profile2?symbol={}",
+                    //             SEARCH_STRING.inner()
+                    //         );
+                    //         *CURRENT_CONTENT.inner() = match CLIENT.company_profile(url) {
+                    //             Ok(search_result) => search_result,
+                    //             Err(e) => e.to_string(),
+                    //         }
+                    //     }
+                    //     ApiChoice::GetMarket => {
+                    //         *CURRENT_CONTENT.inner() = self.choose_market();
+                    //     }
+                    //     ApiChoice::MarketNews => {
+                    //         let string_output = CLIENT.market_news().unwrap();
+                    //         *CURRENT_CONTENT.inner() = string_output;
+                    //     }
+                    //     _ => {}
+                    // },
+                    (KeyCode::Left, _) => {
+                        sender.send(Command::Left).unwrap();
+                    }
+                    (KeyCode::Right, _) => {
+                        sender.send(Command::Right).unwrap();
+                    }
+                    (KeyCode::Tab, _) => {
+                        sender.send(Command::Tab).unwrap();
+                    }
+                    // (KeyCode::Left, _) => {
+                    //     if self.current_window == Window::ApiChoice {
+                    //         self.api_choices.left();
+                    //     }
+                    // }
+                    // (KeyCode::Right, _) => {
+                    //     if self.current_window == Window::ApiChoice {
+                    //         self.api_choices.right();
+                    //     }
+                    // }
+                    // (KeyCode::Tab, _) => {
+                    //     self.switch_window();
+                    // }
+                    (_, _) => {}
+                }
+            }
+            Event::Mouse(_) => {}
+            Event::Resize(num1, num2) => {
+                //println!("Window has been resized to {num1}, {num2}");
+            }
+            Event::Paste(_s) => {}
+            _ => {}
+        }
+        // if self.api_choice() == ApiChoice::SymbolSearch && !SEARCH_STRING.inner().is_empty() {
+        //     *CURRENT_CONTENT.inner() = self.company_search(&SEARCH_STRING.inner());
+        // }
+    }
 
     #[derive(Debug)]
     pub struct TotalApiChoices {
@@ -99,14 +188,14 @@ pub mod app {
 
     impl TotalApiChoices {
         pub fn left(&mut self) {
-            CURRENT_CONTENT.inner().clear();
+            //CURRENT_CONTENT.inner().clear();
             self.current_index = match self.current_index.checked_sub(1) {
                 Some(okay_number) => okay_number,
                 None => self.all_apis.len() - 1,
             };
         }
         pub fn right(&mut self) {
-            CURRENT_CONTENT.inner().clear();
+            //CURRENT_CONTENT.inner().clear();
             let next_number = self.current_index + 1;
             self.current_index = if next_number > (self.all_apis.len() - 1) {
                 0
@@ -122,6 +211,8 @@ pub mod app {
     #[derive(Debug)]
     pub struct FinanceClient {
         pub client: Client,
+        pub sender: SyncSender<Command>,
+        pub receiver: Receiver<ApiCommand>,
     }
 
     #[derive(Debug)]
@@ -130,20 +221,212 @@ pub mod app {
         pub api_choices: TotalApiChoices,
         pub current_market: String,
         pub companies: Vec<String>,
+        pub current_content: String,
+        pub search_string: String,
+        pub api_sender: SyncSender<ApiCommand>,
+        pub receiver: Receiver<Command>,
     }
 
-    impl Default for State {
-        fn default() -> Self {
+    pub enum Command {
+        Backspace,
+        Char(char),
+        CompanyInfo(Vec<StockSymbol>),
+        Enter,
+        Esc,
+        Left,
+        // Gets something that needs to go in the result window
+        ResultWindow(String),
+        Right,
+        Tab,
+    }
+
+    pub enum ApiCommand {
+        SingleRequest,
+        MultiRequest,
+        // name of company to get profile
+        CompanyProfile(String),
+        GetText,
+        // current_market as a String
+        StockSymbols(String),
+        MarketNews,
+    }
+
+    fn make_table(all_choices: Vec<Span>) -> Table {
+        let all_rows = all_choices
+            .chunks(3)
+            .map(|not_yet_row| {
+                let as_vec = not_yet_row.to_vec();
+                Row::new(as_vec)
+            })
+            .collect::<Vec<_>>();
+
+        Table::new(all_rows)
+            // You can set the style of the entire Table.
+            .style(Style::default().fg(Color::White))
+            // As any other widget, a Table can be wrapped in a Block.
+            .block(Block::default().title("Api choices").borders(Borders::ALL))
+            // Columns widths are constrained in the same way as Layout...
+            .widths(&[
+                Constraint::Percentage(33),
+                Constraint::Percentage(33),
+                Constraint::Percentage(34),
+            ])
+            // ...and they can be separated by a fixed spacing.
+            .column_spacing(1)
+            // If you wish to highlight a row in any specific way when it is selected...
+            .highlight_style(Style::default().add_modifier(Modifier::BOLD))
+            // ...and potentially show a symbol in front of the selection.
+            .highlight_symbol(">>")
+    }
+
+    impl State {
+        pub fn receive_command(&mut self) {
+            let command = self.receiver.recv().unwrap();
+            match command {
+                Command::Backspace => {
+                    self.search_string.pop();
+                }
+                Command::Char(c) => {
+                    self.search_string.push(c);
+                }
+                Command::Enter => {
+                            match self.api_choice() {
+                            ApiChoice::CompanyProfile => {
+                                self.api_sender.send(ApiCommand::CompanyProfile(self.search_string.clone())).unwrap();
+                            }
+                            ApiChoice::GetMarket => {
+                                todo!()
+                                //*CURRENT_CONTENT.inner() = self.choose_market();
+                            }
+                            ApiChoice::MarketNews => {
+                                todo!()
+                                // let string_output = CLIENT.market_news().unwrap();
+                                // *CURRENT_CONTENT.inner() = string_output;
+                            }
+                            _ => {}
+                        }
+                },
+                Command::Esc => {
+                    self.search_string.clear();
+                }
+                Command::Left => {
+                    if self.current_window == Window::ApiChoice {
+                        self.api_choices.left();
+                    }
+                }
+                Command::ResultWindow(s) => {
+                    self.current_content = s;
+                }
+                Command::Right => if self.current_window == Window::ApiChoice {
+                    self.api_choices.right();
+                },
+                Command::Tab => {
+                    self.switch_window();
+                },
+                Command::CompanyInfo(company_info) => {
+                    //self.companies = company_info.clone();
+
+                    let mut file = File::create("company_symbols.txt").unwrap();
+                    let num = self
+                        .companies
+                        .iter()
+                        .fold(0, |first, second| second.len() + first);
+                    let mut output_string = String::with_capacity(num);
+                    company_info.iter().for_each(|s| {
+                        let s = format!("{} {}", s.display_symbol, s.description);
+                        output_string.push_str(&s);
+                        output_string.push('\n');
+                    });
+                    file.write_all(output_string.as_bytes()).unwrap();
+                }
+            }
+        }
+
+        pub fn send_command(&mut self, command: ApiCommand) {
+            self.api_sender.send(command).unwrap();
+        }
+
+        pub fn draw_terminal(&mut self, terminal: &mut Terminal<CrosstermBackend<Stdout>>) {
+            terminal
+                .draw(|f| {
+                    // First 2 big blocks
+                    let top_and_bottom = Layout::default()
+                        .direction(Direction::Vertical)
+                        .margin(3)
+                        .constraints(
+                            [
+                                Constraint::Percentage(40), // api and search box
+                                Constraint::Percentage(60), // Results
+                            ]
+                            .as_ref(),
+                        )
+                        .split(f.size());
+
+                    // 2 Rects
+                    let api_and_search_box = Layout::default()
+                        .direction(Direction::Horizontal)
+                        .constraints(
+                            [Constraint::Percentage(70), Constraint::Percentage(30)].as_ref(),
+                        )
+                        .split(top_and_bottom[0]);
+
+                    let highlighted = Style::default().fg(Color::LightYellow);
+                    let unhighlighted = Style::default();
+                    let api_choice_border_style = match self.current_window {
+                        Window::ApiChoice => highlighted,
+                        Window::Results => unhighlighted,
+                    };
+
+                    let results_border_style = match self.current_window {
+                        Window::Results => highlighted,
+                        Window::ApiChoice => unhighlighted,
+                    };
+
+                    // Api choices: top left block
+                    let api_choices = make_table(self.all_choices()).block(
+                        Block::default()
+                            .title("Api search")
+                            .borders(Borders::ALL)
+                            .border_style(api_choice_border_style),
+                    );
+
+                    // Search window: top right block
+                    let search_area = Paragraph::new(self.search_string.clone())
+                        .block(Block::default().title("Search for:").borders(Borders::ALL))
+                        .style(Style::default().fg(Color::White).bg(Color::Black))
+                        .alignment(Alignment::Center)
+                        .wrap(Wrap { trim: true });
+
+                    let results = Paragraph::new(self.current_content.clone())
+                        .block(
+                            Block::default()
+                                .title("Results")
+                                .borders(Borders::ALL)
+                                .border_style(results_border_style),
+                        )
+                        .style(Style::default().fg(Color::White).bg(Color::Black))
+                        .alignment(Alignment::Center)
+                        .wrap(Wrap { trim: true });
+
+                    f.render_widget(api_choices, api_and_search_box[0]);
+                    f.render_widget(search_area, api_and_search_box[1]);
+                    f.render_widget(results, top_and_bottom[1]);
+                })
+                .unwrap();
+        }
+
+        pub fn new(api_sender: SyncSender<ApiCommand>, receiver: Receiver<Command>) -> Self {
             Self {
                 current_window: Window::ApiChoice,
                 api_choices: TotalApiChoices::default(),
                 current_market: "US".to_string(),
                 companies: Vec::new(),
+                current_content: String::new(),
+                search_string: String::new(),
+                api_sender,
+                receiver,
             }
         }
-    }
-
-    impl State {
 
         // todo!() turn this into Tables: 3*3 and then later 4*4
         pub fn all_choices(&self) -> Vec<Span> {
@@ -162,70 +445,70 @@ pub mod app {
                 .collect::<Vec<_>>()
         }
 
-        pub fn handle_event(&mut self) {
-            match read().unwrap() {
-                Event::Key(key_event) => {
-                    let KeyEvent {
-                        code, modifiers, ..
-                    } = key_event;
-                    // Typing event
-                    match (code, modifiers) {
-                        (KeyCode::Char(c), _) => {
-                            SEARCH_STRING.inner().push(c);
-                        }
-                        (KeyCode::Esc, _) => {
-                            SEARCH_STRING.inner().clear();
-                        }
-                        (KeyCode::Backspace, _) => {
-                            SEARCH_STRING.inner().pop();
-                        }
-                        (KeyCode::Enter, _) => match self.api_choice() {
-                            ApiChoice::CompanyProfile => {
-                                let url = format!(
-                                    "{FINNHUB_URL}/stock/profile2?symbol={}",
-                                    SEARCH_STRING.inner()
-                                );
-                                *CURRENT_CONTENT.inner() = match CLIENT.company_profile(url) {
-                                    Ok(search_result) => search_result,
-                                    Err(e) => e.to_string(),
-                                }
-                            }
-                            ApiChoice::GetMarket => {
-                                *CURRENT_CONTENT.inner() = self.choose_market();
-                            }
-                            ApiChoice::MarketNews => {
-                                let string_output = CLIENT.market_news().unwrap();
-                                *CURRENT_CONTENT.inner() = string_output;
-                            }
-                            _ => {}
-                        },
-                        (KeyCode::Left, _) => {
-                            if self.current_window == Window::ApiChoice {
-                                self.api_choices.left();
-                            }
-                        }
-                        (KeyCode::Right, _) => {
-                            if self.current_window == Window::ApiChoice {
-                                self.api_choices.right();
-                            }
-                        }
-                        (KeyCode::Tab, _) => {
-                            self.switch_window();
-                        }
-                        (_, _) => {}
-                    }
-                }
-                Event::Mouse(_) => {}
-                Event::Resize(num1, num2) => {
-                    println!("Window has been resized to {num1}, {num2}");
-                }
-                Event::Paste(_s) => {}
-                _ => {}
-            }
-            if self.api_choice() == ApiChoice::SymbolSearch && !SEARCH_STRING.inner().is_empty() {
-                *CURRENT_CONTENT.inner() = self.company_search(&SEARCH_STRING.inner());
-            }
-        }
+        // pub fn handle_event(&mut self) {
+        //     match read().unwrap() {
+        //         Event::Key(key_event) => {
+        //             let KeyEvent {
+        //                 code, modifiers, ..
+        //             } = key_event;
+        //             // Typing event
+        //             match (code, modifiers) {
+        //                 (KeyCode::Char(c), _) => {
+        //                     SEARCH_STRING.inner().push(c);
+        //                 }
+        //                 (KeyCode::Esc, _) => {
+        //                     SEARCH_STRING.inner().clear();
+        //                 }
+        //                 (KeyCode::Backspace, _) => {
+        //                     SEARCH_STRING.inner().pop();
+        //                 }
+        //                 (KeyCode::Enter, _) => match self.api_choice() {
+        //                     ApiChoice::CompanyProfile => {
+        //                         let url = format!(
+        //                             "{FINNHUB_URL}/stock/profile2?symbol={}",
+        //                             SEARCH_STRING.inner()
+        //                         );
+        //                         *CURRENT_CONTENT.inner() = match CLIENT.company_profile(url) {
+        //                             Ok(search_result) => search_result,
+        //                             Err(e) => e.to_string(),
+        //                         }
+        //                     }
+        //                     ApiChoice::GetMarket => {
+        //                         *CURRENT_CONTENT.inner() = self.choose_market();
+        //                     }
+        //                     ApiChoice::MarketNews => {
+        //                         let string_output = CLIENT.market_news().unwrap();
+        //                         *CURRENT_CONTENT.inner() = string_output;
+        //                     }
+        //                     _ => {}
+        //                 },
+        //                 (KeyCode::Left, _) => {
+        //                     if self.current_window == Window::ApiChoice {
+        //                         self.api_choices.left();
+        //                     }
+        //                 }
+        //                 (KeyCode::Right, _) => {
+        //                     if self.current_window == Window::ApiChoice {
+        //                         self.api_choices.right();
+        //                     }
+        //                 }
+        //                 (KeyCode::Tab, _) => {
+        //                     self.switch_window();
+        //                 }
+        //                 (_, _) => {}
+        //             }
+        //         }
+        //         Event::Mouse(_) => {}
+        //         Event::Resize(num1, num2) => {
+        //             println!("Window has been resized to {num1}, {num2}");
+        //         }
+        //         Event::Paste(_s) => {}
+        //         _ => {}
+        //     }
+        //     if self.api_choice() == ApiChoice::SymbolSearch && !SEARCH_STRING.inner().is_empty() {
+        //         *CURRENT_CONTENT.inner() = self.company_search(&SEARCH_STRING.inner());
+        //     }
+        // }
 
         pub fn stock_symbols_init(&mut self) -> Result<(), Error> {
             match File::open("company_symbols.txt") {
@@ -240,67 +523,47 @@ pub mod app {
                     Ok(())
                 }
                 Err(_) => {
-                    let url = format!(
-                        "{FINNHUB_URL}/stock/symbol?exchange={}",
-                        self.current_market
-                    );
-                    let company_info = CLIENT
-                        .stock_symbols(url)?
-                        .into_iter()
-                        .map(|s| format!("{}: {}\n", s.description, s.display_symbol))
-                        .collect::<Vec<String>>();
-                    self.companies = company_info.clone();
-
-                    let mut file = File::create("company_symbols.txt")?;
-                    let num = self
-                        .companies
-                        .iter()
-                        .fold(0, |first, second| second.len() + first);
-                    let mut output_string = String::with_capacity(num);
-                    company_info.iter().for_each(|s| {
-                        output_string.push_str(s);
-                        output_string.push('\n');
-                    });
-                    file.write_all(output_string.as_bytes())?;
+                    self.api_sender.send(ApiCommand::StockSymbols(self.current_market.clone())).unwrap();
                     Ok(())
                 }
             }
         }
 
         /// User hits enter, checks to see if market exists, if not, stay with original one
-        pub fn choose_market(&mut self) -> String {
-            debug(format!("Choosing market: {self:?}"));
+        pub fn choose_market(&mut self) {
+            //debug(format!("Choosing market: {self:?}"));
 
-            if self.current_market == *SEARCH_STRING.inner() {
-                return format!("Already using market {}", SEARCH_STRING.inner());
+            if self.current_market == self.search_string {
+                self.current_content = format!("Already using market {}", self.search_string);
             }
             match EXCHANGE_CODES
                 .iter()
-                .find(|code| **code == *SEARCH_STRING.inner())
+                .find(|code| **code == self.search_string)
             {
                 // e.g. user types "T", which is valid
                 Some(good_market_code) => {
                     // todo! take this unwrap back out
                     // Add debugging window or something
-                    let url = format!(
-                        "{FINNHUB_URL}/stock/symbol?exchange={}",
-                        self.current_market
-                    );
-                    let stock_symbols = CLIENT.stock_symbols(url).unwrap();
-                    // Now self.current_market is "T"
-                    self.current_market = good_market_code.to_string();
-                    SEARCH_STRING.inner().clear();
-                    self.companies = stock_symbols
-                        .into_iter()
-                        .map(|info| format!("{}: {}", info.description, info.display_symbol))
-                        .collect::<Vec<_>>();
-                    format!(
-                        "Successfully got company info from market {}",
-                        self.current_market
-                    )
+                    self.api_sender.send(ApiCommand::StockSymbols(good_market_code.to_string())).unwrap();
+                    // let url = format!(
+                    //     "{FINNHUB_URL}/stock/symbol?exchange={}",
+                    //     self.current_market
+                    // );
+                    // let stock_symbols = self.stock_symbols(url).unwrap();
+                    // // Now self.current_market is "T"
+                    // self.current_market = good_market_code.to_string();
+                    // self.search_string.clear();
+                    // self.companies = stock_symbols
+                    //     .into_iter()
+                    //     .map(|info| format!("{}: {}", info.description, info.display_symbol))
+                    //     .collect::<Vec<_>>();
+                    // format!(
+                    //     "Successfully got company info from market {}",
+                    //     self.current_market
+                    // )
                 }
                 // user types something that isn't a market
-                None => format!("No market called {} exists", SEARCH_STRING.inner()),
+                None => self.current_content = format!("No market called {} exists", self.search_string),
             }
         }
 
@@ -331,27 +594,42 @@ pub mod app {
         }
     }
 
-    impl Default for FinanceClient {
-        fn default() -> Self {
+    /// Vec<StockSymbol>
+    impl FinanceClient {
+        pub fn receive_command(&self) {
+            let api_command = self.receiver.recv().unwrap();
+            match api_command {
+                ApiCommand::StockSymbols(url) => {
+                    self.stock_symbols(url).unwrap();
+                },
+                ApiCommand::SingleRequest => todo!(),
+                ApiCommand::MultiRequest => todo!(),
+                ApiCommand::CompanyProfile(company_name) => {
+                    let company_info = self.company_profile(company_name);
+                    self.sender.send(Command::ResultWindow(company_info.to_string())).unwrap();
+                },
+                ApiCommand::GetText => todo!(),
+                ApiCommand::MarketNews => todo!(),
+            }
+        }
+
+        pub fn new(sender: SyncSender<Command>, receiver: Receiver<ApiCommand>) -> Self {
             let mut headers = HeaderMap::new();
             headers.insert("X-Finnhub-Token", HeaderValue::from_static(API_KEY));
             let client = Client::builder().default_headers(headers).build().unwrap();
 
-            FinanceClient {
+            Self {
                 client,
+                receiver,
+                sender,
             }
         }
-    }
 
-    /// Vec<StockSymbol>
-    impl FinanceClient {
-
-        pub fn single_request<T: DeserializeOwned + Debug>(&self, url: String) -> Result<T, Error> {
+        pub fn single_request<T: DeserializeOwned + Debug>(&self, url: String, company_name: &str) -> Result<T, Error> {
             let text = self.get_text(url)?;
             let finnhub_reply: T = serde_json::from_str(&text).with_context(|| {
                 format!(
-                    "Couldn't deserialize {} into CompanyProfile struct.\nText from Finnhub: '{text}'",
-                    SEARCH_STRING.inner()
+                    "Couldn't deserialize {company_name} into CompanyProfile struct.\nText from Finnhub: '{text}'"
                 )
             })?;
             Ok(finnhub_reply)
@@ -360,24 +638,27 @@ pub mod app {
         pub fn multi_request<T: DeserializeOwned + Debug>(
             &self,
             url: String,
+            company_name: &str
         ) -> Result<Vec<T>, Error> {
             let text = self.get_text(url)?;
 
             let finnhub_reply: Vec<T> = serde_json::from_str(&text).with_context(|| {
                 format!(
-                    "Couldn't deserialize {} into CompanyProfile struct.\nText from Finnhub: '{text}'",
-                    SEARCH_STRING.inner()
+                    "Couldn't deserialize {company_name} into CompanyProfile struct.\nText from Finnhub: '{text}'",
                 )
             })?;
             Ok(finnhub_reply)
         }
 
-        pub fn company_profile(&self, url: String) -> Result<String, Error> {
+        pub fn company_profile(&self, company_name: String) -> String {
             // /stock/profile?symbol=AAPL
-
-            let company_info = self.single_request::<CompanyProfile>(url)?;
-            SEARCH_STRING.inner().clear();
-            Ok(company_info.to_string())
+            let url = format!("{FINNHUB_URL}/stock/profile2?symbol={company_name}");
+            match self.single_request::<CompanyProfile>(url, &company_name) {
+                Ok(company_profile) => company_profile.to_string(),
+                Err(e) => e.to_string()
+            }
+            //SEARCH_STRING.inner().clear();
+            //Ok(company_info.to_string())
         }
 
         pub fn get_text(&self, url: String) -> Result<String, Error> {
@@ -391,7 +672,6 @@ pub mod app {
                 .with_context(|| "No text for some reason")
         }
 
-        /// /stock/symbol?exchange=US
         pub fn stock_symbols(&self, url: String) -> Result<Vec<StockSymbol>, Error> {
 
             let text = self.get_text(url)?;
@@ -400,6 +680,25 @@ pub mod app {
             let stock_symbols: Vec<StockSymbol> = serde_json::from_str(&text).unwrap();
             Ok(stock_symbols)
         }
+
+        /// /stock/symbol?exchange=US
+        // pub fn stock_symbols_init(&self, current_market: String) -> Result<Vec<StockSymbol>, Error> {
+        //     let url = format!(
+        //         "{FINNHUB_URL}/stock/symbol?exchange={current_market}",
+        //     );
+        //     let company_info = self
+        //         .multi_request(url)
+        //         .unwrap()
+        //         .into_iter()
+        //         .map(|s| format!("{}: {}\n", s.description, s.display_symbol))
+        //         .collect::<Vec<String>>();
+
+        //     let text = self.get_text(url)?;
+        //     let mut new_file = File::create("stock_symbols.json")?;
+        //     write!(&mut new_file, "{}", text)?;
+        //     let stock_symbols: Vec<StockSymbol> = serde_json::from_str(&text).unwrap();
+        //     Ok(stock_symbols)
+        // }
 
         /// company-news?symbol=AAPL&from=2021-09-01&to=2021-09-09
         /// Required: date + symbol
@@ -422,9 +721,6 @@ pub mod app {
                 .for_each(|bit_of_news| output_string.push_str(&format!("{bit_of_news}\n")));
             Ok(output_string)
         }
-
-
-
     }
 
     #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -556,7 +852,7 @@ Url: {weburl}
     /// "symbol": "UPOW",
     /// "type": "Common Stock"
     ///
-    #[derive(Debug, Serialize, Deserialize)]
+    #[derive(Clone, Debug, Serialize, Deserialize)]
     pub struct StockSymbol {
         pub currency: String,
         pub description: String,
@@ -890,22 +1186,22 @@ Url: {weburl}
     // }
 }
 
-#[cfg(test)]
-mod tests {
-    use crate::{app::State, SEARCH_STRING};
+// #[cfg(test)]
+// mod tests {
+//     use crate::{app::State, SEARCH_STRING};
 
-    #[test]
-    fn stock_symbol_init_works() {
-        let mut state = State::default();
-        let stock_symbols = state.stock_symbols_init();
-        assert!(stock_symbols.is_ok());
-    }
+//     #[test]
+//     fn stock_symbol_init_works() {
+//         let mut state = State::default();
+//         let stock_symbols = state.stock_symbols_init();
+//         assert!(stock_symbols.is_ok());
+//     }
 
-    #[test]
-    fn bad_market_input_gives_error() {
-        let mut state = State::default();
-        *SEARCH_STRING.inner() = "bad market".to_string();
-        let res = state.choose_market();
-        assert_eq!(res, "No market called bad market exists");
-    }
-}
+//     #[test]
+//     fn bad_market_input_gives_error() {
+//         let mut state = State::default();
+//         *SEARCH_STRING.inner() = "bad market".to_string();
+//         let res = state.choose_market();
+//         assert_eq!(res, "No market called bad market exists");
+//     }
+// }
