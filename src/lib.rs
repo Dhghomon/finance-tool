@@ -24,13 +24,9 @@ pub mod app {
         sync::mpsc::{Receiver, SyncSender},
     };
 
-    use anyhow::{Context, Error, bail};
-    use chrono::{Months, Utc, TimeZone};
+    use anyhow::{Context, Error};
+    use chrono::{Months, TimeZone, Utc};
     use crossterm::event::{read, Event, KeyCode, KeyEvent};
-    use reqwest::{
-        blocking::Client,
-        header::{HeaderMap, HeaderValue},
-    };
     use serde::de::DeserializeOwned;
     use tui::{
         backend::CrosstermBackend,
@@ -42,7 +38,7 @@ pub mod app {
     };
 
     use crate::{
-        api::{CompanyProfile, MarketNews, StockSymbol, CompanyNews},
+        api::{CompanyNews, CompanyProfile, MarketNews, StockSymbol},
         Window, API_KEY, EXCHANGE_CODES, FINNHUB_URL,
     };
 
@@ -66,11 +62,6 @@ pub mod app {
                     (KeyCode::Enter, _) => {
                         sender.send(Command::Enter).unwrap();
                     }
-
-                    //     ApiChoice::GetMarket => {
-                    //         *CURRENT_CONTENT.inner() = self.choose_market();
-                    //     }
-
                     (KeyCode::Left, _) => {
                         sender.send(Command::Left).unwrap();
                     }
@@ -136,7 +127,6 @@ pub mod app {
 
     #[derive(Debug)]
     pub struct FinanceClient {
-        pub client: Client,
         pub sender: SyncSender<Command>,
         pub receiver: Receiver<ApiCommand>,
     }
@@ -151,6 +141,7 @@ pub mod app {
         pub search_string: String,
         pub api_sender: SyncSender<ApiCommand>,
         pub receiver: Receiver<Command>,
+        pub waiting_for_result: bool
     }
 
     pub enum Command {
@@ -169,12 +160,9 @@ pub mod app {
     }
 
     pub enum ApiCommand {
-        SingleRequest,
-        MultiRequest,
         // name of company to get profile
         CompanyNews(String),
         CompanyProfile(String),
-        GetText,
         // current_market as a String
         StockSymbols(String),
         MarketNews,
@@ -220,12 +208,14 @@ pub mod app {
                 }
                 Command::Enter => match self.api_choice() {
                     ApiChoice::CompanyProfile => {
-                        self.api_sender
-                            .send(ApiCommand::CompanyProfile(self.search_string.clone()))
-                            .unwrap();
+                        self.send_command(ApiCommand::CompanyProfile(self.search_string.clone()));
                     }
                     ApiChoice::GetMarket => {
-                        todo!();
+                        if self.current_market == self.search_string  {
+                            self.current_content = format!("Already using market {}", self.current_market);
+                        } else {
+                            self.send_command(ApiCommand::StockSymbols(self.search_string.clone()));
+                        }
                     }
                     ApiChoice::MarketNews => {
                         self.send_command(ApiCommand::MarketNews);
@@ -244,6 +234,7 @@ pub mod app {
                     }
                 }
                 Command::ResultWindow(s) => {
+                    self.waiting_for_result = false;
                     self.current_content = s;
                 }
                 Command::Right => {
@@ -251,19 +242,21 @@ pub mod app {
                         self.api_choices.right();
                     }
                 }
-                Command::StockSymbols(stock_symbols_res) => {
-                    match stock_symbols_res {
-                        Ok(stock_symbols) => {
-                            let as_companies = stock_symbols.into_iter().map(|stock_symbols| {
+                Command::StockSymbols(stock_symbols_res) => match stock_symbols_res {
+                    Ok(stock_symbols) => {
+                        let as_companies = stock_symbols
+                            .into_iter()
+                            .map(|stock_symbols| {
                                 format!("{} : {}", stock_symbols.description, stock_symbols.symbol)
-                            }).collect::<Vec<String>>();
-                            self.companies = as_companies;
-                        },
-                        Err(e) => {
-                            self.current_content = e.to_string();
-                        }
+                            })
+                            .collect::<Vec<String>>();
+                        self.companies = as_companies;
+                        self.waiting_for_result = false;
                     }
-                }
+                    Err(e) => {
+                        self.current_content = e.to_string();
+                    }
+                },
                 Command::Tab => {
                     self.switch_window();
                 }
@@ -298,6 +291,7 @@ pub mod app {
         }
 
         pub fn send_command(&mut self, command: ApiCommand) {
+            self.waiting_for_result = true;
             self.api_sender.send(command).unwrap();
         }
 
@@ -352,10 +346,11 @@ pub mod app {
                         .alignment(Alignment::Center)
                         .wrap(Wrap { trim: true });
 
+                    let results_title = if self.waiting_for_result { "Waiting for results" } else { "Results" };
                     let results = Paragraph::new(self.current_content.clone())
                         .block(
                             Block::default()
-                                .title("Results")
+                                .title(results_title)
                                 .borders(Borders::ALL)
                                 .border_style(results_border_style),
                         )
@@ -380,6 +375,7 @@ pub mod app {
                 search_string: String::new(),
                 api_sender,
                 receiver,
+                waiting_for_result: false
             }
         }
 
@@ -401,50 +397,10 @@ pub mod app {
         }
 
         pub fn stock_symbols_init(&mut self) -> Result<(), Error> {
-                    self.api_sender
-                        .send(ApiCommand::StockSymbols(self.current_market.clone()))
-                        .unwrap();
-                    Ok(())
-        }
-
-        /// User hits enter, checks to see if market exists, if not, stay with original one
-        pub fn choose_market(&mut self) {
-            if self.current_market == self.search_string {
-                self.current_content = format!("Already using market {}", self.search_string);
-            }
-            match EXCHANGE_CODES
-                .iter()
-                .find(|code| **code == self.search_string)
-            {
-                // e.g. user types "T", which is valid
-                Some(good_market_code) => {
-                    // todo! take this unwrap back out
-                    // Add debugging window or something
-                    self.api_sender
-                        .send(ApiCommand::StockSymbols(good_market_code.to_string()))
-                        .unwrap();
-                    // let url = format!(
-                    //     "{FINNHUB_URL}/stock/symbol?exchange={}",
-                    //     self.current_market
-                    // );
-                    // let stock_symbols = self.stock_symbols(url).unwrap();
-                    // // Now self.current_market is "T"
-                    // self.current_market = good_market_code.to_string();
-                    // self.search_string.clear();
-                    // self.companies = stock_symbols
-                    //     .into_iter()
-                    //     .map(|info| format!("{}: {}", info.description, info.display_symbol))
-                    //     .collect::<Vec<_>>();
-                    // format!(
-                    //     "Successfully got company info from market {}",
-                    //     self.current_market
-                    // )
-                }
-                // user types something that isn't a market
-                None => {
-                    self.current_content = format!("No market called {} exists", self.search_string)
-                }
-            }
+            self.api_sender
+                .send(ApiCommand::StockSymbols(self.current_market.clone()))
+                .unwrap();
+            Ok(())
         }
 
         pub fn switch_window(&mut self) {
@@ -482,44 +438,36 @@ pub mod app {
                 ApiCommand::StockSymbols(url) => {
                     self.stock_symbols(url).unwrap();
                 }
-                ApiCommand::SingleRequest => todo!(),
-                ApiCommand::MultiRequest => todo!(),
                 ApiCommand::CompanyNews(company_symbol) => {
                     let company_news_res = self.company_news(&company_symbol);
                     let result_window_content = match company_news_res {
                         Ok(company_stuff) => company_stuff,
-                        Err(e) => e.to_string()
+                        Err(e) => e.to_string(),
                     };
-                    self.sender.send(Command::ResultWindow(result_window_content)).unwrap();
+                    self.sender
+                        .send(Command::ResultWindow(result_window_content))
+                        .unwrap();
                 }
                 ApiCommand::CompanyProfile(company_name) => {
                     let company_info = self.company_profile(company_name);
                     self.sender
                         .send(Command::ResultWindow(company_info))
                         .unwrap();
-                }
-                ApiCommand::GetText => todo!(),
+                },
                 ApiCommand::MarketNews => {
-
                     let market_res = match self.market_news() {
                         Ok(market_news) => market_news,
-                        Err(e) => e.to_string()
+                        Err(e) => e.to_string(),
                     };
                     self.sender.send(Command::ResultWindow(market_res)).unwrap();
-                },
+                }
             }
         }
 
         pub fn new(sender: SyncSender<Command>, receiver: Receiver<ApiCommand>) -> Self {
-            let mut headers = HeaderMap::new();
-            headers.insert("X-Finnhub-Token", HeaderValue::from_static(API_KEY));
-            let client = Client::builder().default_headers(headers).build().unwrap();
+            // headers.insert("X-Finnhub-Token", HeaderValue::from_static(API_KEY));
 
-            Self {
-                client,
-                receiver,
-                sender,
-            }
+            Self { receiver, sender }
         }
 
         pub fn single_request<T: DeserializeOwned + Debug>(
@@ -561,28 +509,48 @@ pub mod app {
         }
 
         pub fn get_text(&self, url: String) -> Result<String, Error> {
-            let url = format!("{url}&token={API_KEY}");
-            self.client
-                .get(url)
-                .header("X-Finnhub-Token", API_KEY)
-                .send()
-                .with_context(|| "Couldn't send via client")?
-                .text()
+            let url_with_key = format!("{url}&token={API_KEY}");
+            ureq::get(&url_with_key)
+                .set("X-Finnhub-Token", API_KEY)
+                .call()
+                .with_context(|| format!("Couldn't send through url {url}"))?
+                .into_string()
                 .with_context(|| "No text for some reason")
         }
 
         pub fn stock_symbols(&self, current_market: String) -> Result<(), Error> {
             let url = format!("{FINNHUB_URL}/stock/symbol?exchange={current_market}");
-            let text = match self.get_text(url) {
-                Ok(text) => text,
-                Err(e) => bail!(e.to_string())
-            };
-            //let mut new_file = File::create("stock_symbols.json")?;
-            //write!(&mut new_file, "{}", text)?;
-            let stock_symbols: Result<Vec<StockSymbol>, Error> = serde_json::from_str(&text)
-                .map_err(|e| anyhow::anyhow!(format!("Couldn't make any stock symbols: {e}")));
-            self.sender.send(Command::StockSymbols(stock_symbols)).unwrap();
-            Ok(())
+            let res = self.get_text(url);
+            match res {
+                Ok(text) => {
+                    let stock_symbols: Result<Vec<StockSymbol>, Error> =
+                        serde_json::from_str(&text).map_err(|e| {
+                            anyhow::anyhow!(format!("Couldn't make any stock symbols: {e}"))
+                        });
+                    self.sender
+                        .send(Command::StockSymbols(stock_symbols))
+                        .unwrap();
+                    Ok(())
+                }
+                Err(e) => {
+                    self.sender
+                        .send(Command::ResultWindow(format!(
+                            "Couldn't get new market data: {e}"
+                        )))
+                        .unwrap();
+                    Ok(())
+                }
+            }
+            // let text = match self.get_text(url) {
+            //     Ok(text) => text,
+            //     Err(e) => bail!(e.to_string())
+            // };
+            // //let mut new_file = File::create("stock_symbols.json")?;
+            // //write!(&mut new_file, "{}", text)?;
+            // let stock_symbols: Result<Vec<StockSymbol>, Error> = serde_json::from_str(&text)
+            //     .map_err(|e| anyhow::anyhow!(format!("Couldn't make any stock symbols: {e}")));
+            // self.sender.send(Command::StockSymbols(stock_symbols)).unwrap();
+            // Ok(())
             //Ok(())
             //self.stock_symbols(current_market)
             //Ok(stock_symbols)
@@ -614,22 +582,23 @@ pub mod app {
             let six_months = Months::new(6);
             let six_months_ago = now - six_months;
             let url = format!("{FINNHUB_URL}/company-news/?symbol={company_symbol}&from={six_months_ago}&to={now}");
-            let news_items: Result<Vec<CompanyNews>, Error> = self.multi_request(url, company_symbol);
+            let news_items: Result<Vec<CompanyNews>, Error> =
+                self.multi_request(url, company_symbol);
             match news_items {
-                Err(e) => {
-                    Err(anyhow::anyhow!(format!("Couldn't get news for company {company_symbol}: {e}")))
-                },
-                Ok(items) if items.is_empty() => {
-                    Err(anyhow::anyhow!(format!("Couldn't get news for company {company_symbol}")))
-                }
-                Ok(items) => {
-                    Ok(items.into_iter().map(|blurb| {
+                Err(e) => Err(anyhow::anyhow!(format!(
+                    "Couldn't get news for company {company_symbol}: {e}"
+                ))),
+                Ok(items) if items.is_empty() => Err(anyhow::anyhow!(format!(
+                    "Couldn't get news for company {company_symbol}"
+                ))),
+                Ok(items) => Ok(items
+                    .into_iter()
+                    .map(|blurb| {
                         let datetime = Utc.timestamp(blurb.datetime, 0).date_naive();
                         format!("{} {} || {}\n\n", datetime, blurb.headline, blurb.source)
                     })
                     .take(5)
-                    .collect::<String>())
-                }
+                    .collect::<String>()),
             }
         }
 
