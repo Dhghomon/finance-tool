@@ -1,0 +1,1 @@
+window.SIDEBAR_ITEMS = {"constant":[["API_KEY",""],["EXCHANGE_CODES",""],["FINNHUB_URL",""]],"enum":[["Window",""]],"mod":[["api","Structs and enums for the Finnhub API."],["app",""]]};

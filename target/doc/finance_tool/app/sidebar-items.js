@@ -1,0 +1,1 @@
+window.SIDEBAR_ITEMS = {"enum":[["ApiChoice",""],["ApiCommand",""],["Command",""]],"fn":[["handle_event",""],["make_table",""]],"struct":[["FinanceClient",""],["State",""],["TotalApiChoices",""]]};

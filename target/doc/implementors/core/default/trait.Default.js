@@ -1,0 +1,3 @@
+(function() {var implementors = {
+"finance_tool":[["impl <a class=\"trait\" href=\"https://doc.rust-lang.org/1.67.0/core/default/trait.Default.html\" title=\"trait core::default::Default\">Default</a> for <a class=\"struct\" href=\"finance_tool/app/struct.TotalApiChoices.html\" title=\"struct finance_tool::app::TotalApiChoices\">TotalApiChoices</a>"]]
+};if (window.register_implementors) {window.register_implementors(implementors);} else {window.pending_implementors = implementors;}})()
